@@ -1,0 +1,14 @@
+# For all scripts
+numpy
+pandas
+matplotlib
+scipy
+tator
+opencv-python
+
+# # For dashapp
+# plotly
+# dash
+
+# # For jupyter notebooks
+# jupyter
