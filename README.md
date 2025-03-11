@@ -26,6 +26,7 @@ This project is licensed under the **MIT License**. See the LICENSE file for det
 ## ✨ Contributors
 - **Anh Pham** - Maintainer & Developer
 
----
+
 🔗 **GitHub Repository:** https://github.com/anhph95/nes-lter-stingray
+
 🚀 **Stingray Dashboard:** http://calm.whoi.edu:8050
