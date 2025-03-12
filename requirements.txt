@@ -4,13 +4,13 @@ pandas
 matplotlib
 scipy
 
-# # For shadowgraph list
-# tator
-# opencv-python
+# For dashapp
+plotly
+dash
 
-# # For dashapp
-# plotly
-# dash
+# # For shadowgraph list
+# opencv-python
+# tator # Only if working with Tator
 
 # # For jupyter notebooks
 # jupyter
