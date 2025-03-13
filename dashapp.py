@@ -5,16 +5,21 @@ import pandas as pd
 import numpy as np
 import os
 import plotly.graph_objects as go
+from pathlib import Path
 
-# Directory containing CSV files
-work_dir = '/dash_data' if os.path.isdir('/dash_data') else 'dash_data'
+# Dash App Initialization
+app = dash.Dash(__name__)
 
-# Get list of available CSV files in the directory
-csv_files = sorted([f[:-4] for f in os.listdir(work_dir) if f.endswith('.csv') and not f.startswith('NESLTER')])
+# Define working directory and subdirectories
+work_dir = Path('/dash_data') if Path('/dash_data').is_dir() else Path('dash_data')
+data_dir, misc_dir = work_dir / 'data', work_dir / 'misc'
 
-# Load bathymetry and station data
-stations = pd.read_csv(f'{work_dir}/NESLTER_station_list.csv')
-bathy = pd.read_csv(f'{work_dir}/NESLTER_transect_bathymetry.csv')
+# Function to scan for CSV files
+def get_csv_files():
+    return sorted(f.stem for f in data_dir.glob("*.csv")) if data_dir.exists() else []
+
+# # Get list of available CSV files (without extensions)
+# csv_files = sorted(f.stem for f in data_dir.glob("*.csv")) if data_dir.exists() else []
 
 # Units for each variable
 sled_units = {
@@ -38,12 +43,9 @@ sled_units = {
     'altitude': 'm',
 }
 
-# Dash App Initialization
-app = dash.Dash(__name__)
-
 def load_data(file_name):
     '''Load CSV file into a DataFrame and preprocess it.'''
-    df = pd.read_csv(f'{work_dir}/{file_name}.csv', low_memory=False)
+    df = pd.read_csv(f'{data_dir}/{file_name}.csv', low_memory=False)
     if not pd.api.types.is_datetime64_any_dtype(df['times']):
         df['times'] = pd.to_datetime(df['times'], errors='coerce', cache=True)
     for col in ['media', 'frame', 'media_path', 'link']:
@@ -51,6 +53,7 @@ def load_data(file_name):
     return df
 
 # Initial dataset
+csv_files = get_csv_files()
 if csv_files:
     df = load_data(csv_files[-1])
 else:
@@ -60,6 +63,10 @@ else:
 meta_vars = ['timestamp', 'times', 'matdate', 'latitude', 'longitude', 'depth', 'media', 'media_path', 'frame', 'id', 'link']
 sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars] if not df.empty else []
 colormaps = [name for name in px.colors.sequential.__dict__ if not name.startswith('_')]
+
+# Load bathymetry and station data if files exist
+load_csv = lambda file: pd.read_csv(file, dtype=str, encoding="utf-8") if file.exists() else None
+stations, bathy = map(load_csv, [misc_dir / 'NESLTER_station_list.csv', misc_dir / 'NESLTER_transect_bathymetry.csv'])
 
 # App Layout
 app.layout = html.Div([
@@ -87,6 +94,19 @@ app.layout = html.Div([
                         options=[{'label': f, 'value': f} for f in csv_files],
                         value=csv_files[-1] if csv_files else None, clearable=False,
                         style={'width': '140px', 'font-size': '12px'}),
+            html.Button('Refresh', id='refresh-button', n_clicks=0,
+                        style={
+                            'font-size': '12px',  # Slightly larger text
+                            'padding': '5px 5px',  # More padding for better visibility
+                            'background-color': '#007BFF',  # Bright blue to stand out
+                            'color': 'white',  # White text for contrast
+                            'border': 'none',  # Remove default border
+                            'border-radius': '5px',  # Rounded corners
+                            'cursor': 'pointer',  # Pointer cursor to indicate it's clickable
+                            'box-shadow': '2px 2px 5px rgba(0, 0, 0, 0.2)',  # Light shadow to make it pop
+                            'margin-left': '10px',
+                            'transition': '0.3s'  # Smooth transition for hover effect
+                        },),
 
             html.Label('Start Date:', style={'font-size': '12px'}),
             dcc.Input(
@@ -229,6 +249,19 @@ app.layout = html.Div([
         )
     ], style={'display': 'flex', 'flex-direction': 'row', 'align-items': 'stretch', 'justify-content': 'flex-end'})
 ])
+
+# Callback to update file list and maintain valid selection
+@app.callback(
+    Output("csv-selector", "options"),
+    Output("csv-selector", "value"),  # Ensure dropdown selection stays valid
+    Input("refresh-button", "n_clicks"),
+    prevent_initial_call=True  # Prevents running on app startup
+)
+def update_file_list(n_clicks):
+    files = get_csv_files()  # Refresh file list
+    options = [{'label': f, 'value': f} for f in files]
+    new_value = files[-1] if files else None
+    return options, new_value
 
 @app.callback(
     [
