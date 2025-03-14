@@ -11,10 +11,10 @@ import tator
 
 def cli():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cruise', type=str, help='Cruise ID')
-    parser.add_argument('--host', type=str, help='Tator host', default='https://tator.whoi.edu')
+    parser.add_argument('--cruise', type=str, help='Cruise ID, required, e.g. EN706')
+    parser.add_argument('--host', type=str, help='Tator host IP address, defaul is https://tator.whoi.edu', default='https://tator.whoi.edu')
     parser.add_argument('--project-id', type=int, help='Project ID', default=1)
-    parser.add_argument('--token', type=str, help='Tator login token')
+    parser.add_argument('--token', type=str, help='Tator login token, string or token file')
     parser.add_argument('--media-dir', type=str, help='Path to the media data')
     args = parser.parse_args()
     return args
@@ -65,7 +65,7 @@ def main():
     
     if file_paths == []:
         print(f'No files found in {media_dir}')
-        continue
+        return
 
     # Step 2: Use Multi-threading to get file sizes faster
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()-1) as executor:

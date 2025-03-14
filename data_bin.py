@@ -14,13 +14,13 @@ logging.basicConfig(
 def cli():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Process sensor and media data for a given cruise.")
-    parser.add_argument('--cruise', type=str, required=True, help='Cruise ID')
-    parser.add_argument('--sensor_dir', type=str, default='rawdata', help='Path to the sensor data')
-    parser.add_argument('--media_dir', type=str, default='medialist', help='Path to the media data')
+    parser.add_argument('--cruise', type=str, required=True, help='Cruise ID, required, e.g. EN706')
+    parser.add_argument('--sensor_dir', type=str, default='rawdata', help='Path to the sensor data, default is rawdata')
+    parser.add_argument('--media_dir', type=str, default='medialist', help='Path to the media data, default is medialist')
     parser.add_argument('--bin_cols', type=str, nargs='+', default=['matdate', 'depth'],
                         help='Columns to bin (space-separated list, e.g., \"matdate depth\")')
     parser.add_argument('--bin_steps', type=float, nargs='+', default=[30/86400, 1],
-                        help='Steps to bin (space-separated list, e.g., \"0.000347 1\" [30 seconds/86400, 1 meter])')
+                        help='Steps to bin (space-separated list, e.g., \"0.000347 1\" [30 seconds converted to day by dividing for 86400, 1 meter])')
     return parser.parse_args()
 
 def main():
@@ -84,7 +84,7 @@ def main():
     ]
 
     date_string = df_mean['times'][0].strftime('%Y%m%d')
-    output_file = f'dash_data/{date_string}_{cruise}.csv'
+    output_file = f'dash_data/data/{date_string}_{cruise}.csv'
     df_mean.to_csv(output_file, encoding='utf-8', index=False)
     logging.info(f"Processed {date_string}_{cruise}. Data saved as {output_file}")
 

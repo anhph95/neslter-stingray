@@ -14,20 +14,21 @@ def cli():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Merge sensor data from multiple CSV files.")
     parser.add_argument('--path', type=str, default='/mnt/vast/nes-lter/Stingray/data/sensor_data', 
-                        help='Path to the sensor data')
-    parser.add_argument('--cal_year', type=str, default='2021', 
-                        help='Calibration year')
+                        help='Path to the sensor data, default is /mnt/vast/nes-lter/Stingray/data/sensor_data')
+    parser.add_argument('--cal_year', type=int, default=2021, 
+                        help='Sensor calibration year, default is 2021')
     parser.add_argument('--cruise', type=str, required=True, 
-                        help='Cruise ID')
+                        help='Cruise ID, required, e.g. EN706')
     parser.add_argument('--start_date', type=str, required=True, 
-                        help='Cruise start date (YYYY-MM-DD)')
+                        help='Cruise start date (YYYY-MM-DD), required')
     parser.add_argument('--end_date', type=str, required=True, 
-                        help='Cruise end date (YYYY-MM-DD)')
+                        help='Cruise end date (YYYY-MM-DD), required')
     return parser.parse_args()
 
 def main():
     try:
         args = cli()
+        args.cal_year = str(args.cal_year)
         start_date = datetime.strptime(args.start_date, '%Y-%m-%d')
         end_date = datetime.strptime(args.end_date, '%Y-%m-%d')
         pathlib.Path('rawdata').mkdir(parents=True, exist_ok=True)

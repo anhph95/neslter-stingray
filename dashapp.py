@@ -7,6 +7,16 @@ import os
 import plotly.graph_objects as go
 from pathlib import Path
 
+def cli():
+    import argparse
+    parser = argparse.ArgumentParser(description='Stingray Dashboard')
+    parser.add_argument('--host', type=str, help='Host IP address for the Dash app, default is 0.0.0.0', default='0.0.0.0')
+    parser.add_argument('--port', type=int, help='Port number for the Dash app, default is 8050', default=8050)
+    return parser.parse_args()
+
+args = cli()
+args.port = str(args.port)
+
 # Dash App Initialization
 app = dash.Dash(__name__)
 
@@ -517,4 +527,4 @@ def display_click_data(clickData):
         return f'⚠️ Error processing click data: {str(e)}'
 
 if __name__ == '__main__':
-    app.run_server(host='0.0.0.0', port='8050')
+    app.run_server(host=args.host, port=args.port)
