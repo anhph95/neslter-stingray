@@ -2,6 +2,7 @@
 
 ## 📌 Overview
 This repository contains code and data processing scripts for the In-situ Ichthyoplankton Imaging System (ISIIS), also known as Stingray.
+[![DOI](https://zenodo.org/badge/946902610.svg)](https://doi.org/10.5281/zenodo.15025961)
 
 ## 📦 Installation
 ### Clone this repository
