@@ -86,7 +86,7 @@ Data from dash_data\data folder can then be copied into
 ```
 \\vast.whoi.edu\proj\nes-lter\stingray_dashboard\dash_data\data
 ```
-The dash board can then be accessed via http://calm.whoi.edu:8050
+The dash board can then be accessed via [http://calm.whoi.edu:8050](https://amplify-stingraydash.whoi.edu/)
 
 
 ### OR run the visualization app on your own, required plotly, dash
