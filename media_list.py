@@ -106,9 +106,9 @@ def main():
     # Using a safer approach by calculating adjusted timestamps within each group
     adjusted_timestamps = []
 
-    for _, group in df.groupby("media"):
+    for _, group in df.groupby("media",sort=False):
         base_timestamp = group["media_time"].iloc[0]
-        adjusted = group["frame"].apply(lambda frame: base_timestamp + timedelta(seconds=(frame - 1) / 15))
+        adjusted = group["frame"].apply(lambda frame: base_timestamp + timedelta(seconds=frame/ 15))
         adjusted_timestamps.extend(adjusted)
 
     # Add the calculated timestamps back to the DataFrame
