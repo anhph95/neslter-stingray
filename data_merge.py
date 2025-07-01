@@ -45,10 +45,10 @@ def main():
 
         # Merge all data
         logging.info("Processing CTD data...")
-        ctd['Density'] = ies80(ctd['Salinity'], ctd['Temperature'], ctd['Pressure'] / 10)
+        ctd['Density_IES80'] = ies80(ctd['Salinity'], ctd['Temperature'], ctd['Pressure'] / 10)
         ctd['Times'], ctd['matdate'] = convert_timestamp(ctd['Timestamp'])
         sled = ctd[['Timestamp', 'Times', 'matdate', 'Temperature', 'Conductivity', 
-                    'Pressure', 'Depth', 'Salinity', 'Density']]
+                    'Pressure', 'Depth', 'Salinity', 'Sound Velocity', 'Density', 'Density_IES80']].copy()
 
         # Merge GPS data
         if not gps.empty:
@@ -58,14 +58,12 @@ def main():
         else:
             logging.warning("GPS data is missing. Skipping GPS merge.")
 
-        # Merge Nitrate data
-        if not nitrate.empty:
-            nitrate = merge_df(nitrate, sled, on='Timestamp', duplicates=True)
-            nitrate['NitrateConcentration[uM]'] = calibrate_nitrate(nitrate, args.cruise)
-            sled = merge_df(sled, nitrate, on='Timestamp', cols=['NitrateConcentration[uM]'])
+        # Merge DVL data
+        if not dvl.empty:
+            sled = merge_df(sled, dvl, on='Timestamp', cols=['anglePitch', 'angleRoll', 'angleHeading', 'distanceAltitude'])
         else:
-            logging.warning("Nitrate data is missing. Skipping Nitrate merge.")
-
+            logging.warning("DVL data is missing. Skipping DVL merge.")
+        
         # Merge Fluorometer data
         if not fluorometer.empty:
             fluorometer['Chlorophyll'] = calibrate('chlorophyll', fluorometer['Chlorophyll'], args.cal_year)
@@ -73,25 +71,27 @@ def main():
             sled = merge_df(sled, fluorometer, on='Timestamp', cols=['Chlorophyll', 'Backscattering'])
         else:
             logging.warning("Fluorometer data is missing. Skipping Fluorometer merge.")
-
+        
         # Merge PAR data
         if not par.empty:
             par['Raw PAR [V]'] = calibrate('par', par['Raw PAR [V]'], args.cal_year)
             sled = merge_df(sled, par, on='Timestamp', cols=['Raw PAR [V]'])
         else:
             logging.warning("PAR data is missing. Skipping PAR merge.")
-
+        
         # Merge Oxygen data
         if not oxygen.empty:
             sled = merge_df(sled, oxygen, on='Timestamp', cols=['O2Concentration', 'AirSaturation'])
         else:
             logging.warning("Oxygen data is missing. Skipping Oxygen merge.")
-
-        # Merge DVL data
-        if not dvl.empty:
-            sled = merge_df(sled, dvl, on='Timestamp', cols=['anglePitch', 'angleRoll', 'angleHeading', 'distanceAltitude'])
+        
+        # Merge Nitrate data
+        if not nitrate.empty:
+            nitrate = merge_df(nitrate, sled, on='Timestamp', duplicates=True)
+            nitrate['NitrateConcentration[uM]'] = calibrate_nitrate(nitrate, args.cruise)
+            sled = merge_df(sled, nitrate, on='Timestamp', cols=['NitrateConcentration[uM]'])
         else:
-            logging.warning("DVL data is missing. Skipping DVL merge.")
+            logging.warning("Nitrate data is missing. Skipping Nitrate merge.")
 
         # Change column names
         sled.rename(columns=sled_columns, inplace=True)

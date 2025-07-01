@@ -191,7 +191,7 @@ app.layout = html.Div([
         html.Div([
             html.Label('X-Axis:', style={'font-size': '12px'}),
             dcc.Dropdown(id='x-axis-variable', value='latitude', clearable=False,
-                options=[{'label': lbl, 'value': val} for lbl, val in [('Latitude', 'latitude'), ('Time', 'times')]],
+                options=[{'label': lbl, 'value': val} for lbl, val in [('Latitude', 'latitude'), ('Latitude_bin', 'latitude_bin'), ('Time', 'times')]],
                 style={'width': '100px', 'font-size': '12px'}),
             html.Label('Min Depth:', style={'font-size': '12px'}),
             dcc.Input(id='z-min', type='number', value=0, debounce=True,
@@ -235,7 +235,7 @@ app.layout = html.Div([
             dcc.Input(id='filter-max', type='number', debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
             html.Label('Filter Opacity:', style={'font-size': '12px'}),
-            dcc.Input(id='hidden-opacity', type='number', value=0.01, step=0.01, debounce=True,
+            dcc.Input(id='hidden-opacity', type='number', value=0.05, step=0.01, debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
             html.Label('Fig Width:', style={'font-size': '12px'}),
             dcc.Input(id='fig-width', type='number', value=None, debounce=True,
@@ -253,48 +253,61 @@ app.layout = html.Div([
         'box-shadow': '0px 2px 5px rgba(0,0,0,0.1)'
     }),
 
-    # Section plot and store, full width matching scatter plot
+    # Section Plot (full-width) with Store
     html.Div([
-        html.Div(
-            dcc.Graph(id='section-plot', style={'width': '100%','height': '250px'})
-        ),
+        dcc.Graph(id='section-plot', style={'width': '100%', 'height': '250px'}),
         dcc.Store(id='filtered-selection-range')
     ], style={
         'backgroundColor': '#F0F0F0',
         'padding': '10px',
-        'border-radius': '5px',
-        'box-shadow': '0px 2px 5px rgba(0,0,0,0.1)'
+        'borderRadius': '5px',
+        'boxShadow': '0px 2px 5px rgba(0,0,0,0.1)',
+        'marginBottom': '20px'
     }),
 
-    # Scatter plot + click display + zoom store
+    # Scatter Plot with Sidebar (Click Output + Store)
     html.Div([
-        dcc.Graph(id='scatter-plot', style={'flex': '7', 'align-self': 'stretch'}),
-        html.Div(
-            id='click-output',
-            style={
-                'flex': '3',
-                'padding': '10px 10px',
-                # 'height': '500px',
+        # Scatter Plot (takes most space)
+        dcc.Graph(id='scatter-plot', style={'flex': '7', 'height': '100%'}),
+
+        # Click Output Panel
+        html.Div([
+            html.Div(id='click-output', style={
+                'padding': '10px',
                 'overflowX': 'auto',
-                'text-align': 'left',
+                'textAlign': 'left',
                 'backgroundColor': 'white',
-            }
-        ),
-        dcc.Store(id='available-sensor-vars')
-    ], style={'display': 'flex', 'flex-direction': 'row', 'align-items': 'stretch', 'justify-content': 'flex-end','height': '600px'}),
-    
+                'height': '100%'
+            }),
+            dcc.Store(id='available-sensor-vars')
+        ], style={'flex': '3', 'display': 'flex', 'flexDirection': 'column'})
+    ], style={
+        'display': 'flex',
+        'flexDirection': 'row',
+        'alignItems': 'stretch',
+        'height': '500px',
+        'marginBottom': '20px'
+    }),
+
+    # TS Plot and Profile Plot (side-by-side)
     html.Div([
-        dcc.Graph(id='ts-plot', style={'height': '600px','align-self': 'stretch','aspect-ratio': '1.1'}),    
-        html.Div(
-            style={
-                'flex': '3',
-                'padding': '10px 10px',
-                'overflowX': 'auto',
-                'text-align': 'left',
-                'backgroundColor': 'white',
-            }
-        ),
-    ], style={'display': 'flex', 'flex-direction': 'row', 'align-items': 'stretch', 'justify-content': 'flex-end', 'height': '600px'}),
+        dcc.Graph(id='ts-plot', style={
+            'width': '550px',
+            'height': '500px',
+            'padding': '10px'
+        }),
+        dcc.Graph(id='profile-plot', style={
+            'width': '500px',
+            'height': '550px',
+            'padding': '10px'
+        })
+    ], style={
+        'display': 'flex',
+        'flexDirection': 'row',
+        'justifyContent': 'left',
+        'alignItems': 'left',
+        'gap': '20px'
+    })
 ])
 
 # --- Callback to populate CSV selector and ensure valid default selection ---
@@ -392,6 +405,16 @@ def update_color_variable_options(csv_file, current_color):
     else:
         return color_options, (sensor_vars[0] if sensor_vars else None)
 
+@app.callback(
+    [
+        Output('vmin-input', 'value'),
+        Output('vmax-input', 'value')
+    ],
+    Input('color-variable', 'value'),
+    prevent_initial_call=True
+)
+def reset_vmin_vmax(color_var):
+    return None, None
 
 # --- Callback: Section plot for time-latitude selection ---
 @app.callback(
@@ -534,6 +557,10 @@ def update_plot(csv_file, start_date, start_time, end_date,  end_time,
     # Load and filter data
     df = load_data(csv_file)
     sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
+    
+    # Check x_axis variable
+    if x_axis not in df.columns:
+        x_axis = 'latitude'
 
     if filter_min is not None and filter_max is not None:
         df = df[df[color_var].between(filter_min, filter_max) & df[color_var].notna()]
@@ -573,7 +600,7 @@ def update_plot(csv_file, start_date, start_time, end_date,  end_time,
     )
 
     # Optional overlays
-    if 'True' in bathymetry and x_axis == 'latitude':
+    if 'True' in bathymetry and (x_axis == 'latitude' or x_axis == 'latitude_bin'):
         fig.add_trace(go.Scatter(
             x=bathy['latitude'],
             y=bathy['bottom_depth_meters'],
@@ -583,7 +610,7 @@ def update_plot(csv_file, start_date, start_time, end_date,  end_time,
             showlegend=False
         ))
 
-    if 'True' in station and stations is not None and x_axis == 'latitude':
+    if 'True' in station and stations is not None and (x_axis == 'latitude' or x_axis == 'latitude_bin'):
         fig.update_layout(
             annotations=[
                 dict(x=lat, y=1.05, xref='x', yref='paper', text=label,
@@ -598,7 +625,7 @@ def update_plot(csv_file, start_date, start_time, end_date,  end_time,
         )
 
     # X-axis range logic (latitude has priority)
-    if x_axis == 'latitude' and latmin is not None and latmax is not None:
+    if (x_axis == 'latitude' or x_axis == 'latitude_bin') and latmin is not None and latmax is not None:
         x_range = [latmax, latmin]
     else:
         x_range = [df['times'].min(), df['times'].max()] if x_axis == 'times' else None
@@ -772,6 +799,128 @@ def update_ts_plot(csv_file, start_date, start_time, end_date,  end_time,
         )
     )
 
+    return fig
+
+@app.callback(
+    Output('profile-plot', 'figure'),
+    [
+        Input('csv-selector', 'value'),
+        Input('start-date', 'value'),
+        Input('start-time', 'value'),
+        Input('end-date', 'value'),
+        Input('end-time', 'value'),
+        Input('color-variable', 'value'),
+        Input('color-map', 'value'),
+        Input('vmin-input', 'value'),
+        Input('vmax-input', 'value'),
+        Input('z-min', 'value'),
+        Input('z-max', 'value'),
+        Input('filter-min', 'value'),
+        Input('filter-max', 'value'),
+        Input('hidden-opacity', 'value'),
+        Input('fig-width', 'value'),
+        Input('fig-height', 'value'),
+        Input('filtered-selection-range', 'data')
+    ]
+)
+def update_profile_plot(csv_file, start_date, start_time, end_date,  end_time,
+                        color_var, color_map, vmin, vmax, zmin, zmax,
+                        filter_min, filter_max, hidden_opacity,
+                        fig_width, fig_height, select_range):
+
+    if not csv_file:
+        return px.scatter()
+
+    df = load_data(csv_file)
+
+    # Apply value filter
+    if filter_min is not None and filter_max is not None:
+        df = df[df[color_var].between(filter_min, filter_max) & df[color_var].notna()]
+
+    # Set color range dynamically if not provided
+    if vmin is None or vmax is None:
+        q = df[color_var].quantile([0.05, 0.95])
+        vmin = q[0.05] if vmin is None else vmin
+        vmax = q[0.95] if vmax is None else vmax
+
+    # Date time filtering
+    start_dt = pd.to_datetime(f"{start_date} {start_time}" if start_time else start_date, errors='coerce')
+    end_dt = pd.to_datetime(f"{end_date} {end_time}" if end_time else end_date, errors='coerce')
+    if pd.notnull(start_dt) and pd.notnull(end_dt):
+        df = df[(df['times'] >= start_dt) & (df['times'] <= end_dt)] 
+
+    if select_range and all(k in select_range for k in ['x0', 'x1', 'y0', 'y1']):
+        lat0, lat1 = sorted([select_range['x0'], select_range['x1']])
+        d0, d1 = sorted([select_range['y0'], select_range['y1']])
+        mask = df['latitude'].between(lat0, lat1) & df['depth'].between(d0, d1)
+        df = df[mask].reset_index(drop=True)
+    
+    if 'depth_bin' not in df.columns:
+        step = 1
+        df['depth_bin'] = np.floor((df['depth'] + step / 2) / step) * step
+        
+    main_summary = df.groupby('depth_bin')[color_var].agg(
+        median=lambda x: x.median(),
+        q25=lambda x: x.quantile(0.25),
+        q75=lambda x: x.quantile(0.75)
+    ).reset_index()
+    
+    fig = go.Figure()
+
+    # Line plot for median
+    fig.add_trace(go.Scatter(
+        x=main_summary['median'],
+        y=main_summary['depth_bin'],
+        mode='lines+markers',  # dots + line = "O-dot"
+        line=dict(color='blue'),
+        marker=dict(symbol='circle', size=6, color='blue'),
+        showlegend=False
+    ))
+    
+    # Shaded area between q25 and q75
+    fig.add_trace(go.Scatter(
+        x=main_summary['q25'],
+        y=main_summary['depth_bin'],
+        mode='lines',
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo='skip'
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=main_summary['q75'],
+        y=main_summary['depth_bin'],
+        fill='tonextx',
+        mode='lines',
+        fillcolor='rgba(0, 0, 255, 0.3)',  # tab:blue with alpha
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo='skip'
+    ))
+
+    fig.update_layout(
+        dragmode="zoom",
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        font=dict(color='black'),
+        width=fig_width or None,
+        height=fig_width or None,  # ensure square shape
+    )
+    
+    # Reverse y-axis if depth increases downward
+    fig.update_yaxes(
+        range=[zmax, zmin-10], title='Depth (m)',
+        showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
+        showline=True, linecolor='black', linewidth=1,
+        mirror=True, ticks='outside', tickwidth=1, tickcolor='black'
+        )
+    
+    fig.update_xaxes(
+        title=f'{color_var.replace("_", " ").capitalize()} ({sled_units.get(color_var, "")})',
+        showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
+        showline=True, linecolor='black', linewidth=1,
+        mirror=True, ticks='outside', tickwidth=1, tickcolor='black'
+    )
     return fig
 
 @app.callback(
