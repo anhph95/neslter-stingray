@@ -1012,7 +1012,7 @@ if __name__ == '__main__':
     # Command-line arguments
     args = cli()
     args.port = str(args.port)
-    app.run_server(host=args.host, port=args.port, processes=n_process, threaded=False, debug=False)
+    app.run(host=args.host, port=args.port, processes=n_process, threaded=False, debug=False)
 else:
     # WSGI-compatible Flask server (eg gunicorn)
     application = app.server
