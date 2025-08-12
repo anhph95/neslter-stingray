@@ -93,10 +93,6 @@ def cli():
     parser.add_argument('--port', type=int, help='Port number for the Dash app, default is 8050', default=8050)
     return parser.parse_args()
 
-# Command-line arguments
-args = cli()
-args.port = str(args.port)
-
 # ========== Dash App Initialization ==========
 app = dash.Dash(__name__)
 
@@ -1013,4 +1009,10 @@ def display_click_data(clickData, sensor_vars):
         return f'⚠️ Error processing click data: {str(e)}'
 
 if __name__ == '__main__':
-    app.run_server(host=args.host, port=args.port, processes=n_process, threaded=False, debug=False)
+    # Command-line arguments
+    args = cli()
+    args.port = str(args.port)
+    app.run(host=args.host, port=args.port, processes=n_process, threaded=False, debug=False)
+else:
+    # WSGI-compatible Flask server (eg gunicorn)
+    application = app.server
