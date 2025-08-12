@@ -1,0 +1,6 @@
+# Ignore files
+*.csv
+*.CAL
+
+# Keep misc file
+!dash_data/misc

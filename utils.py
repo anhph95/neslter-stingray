@@ -791,7 +791,7 @@ class StationLocator(object):
             names.append(name)
             distances.append(distance)
         
-        return names, distance
+        return names, distances
     
     # Usage
     # locator = StationLocator(cruise)
