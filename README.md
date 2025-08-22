@@ -81,12 +81,12 @@ options:
                         Steps to bin (space-separated list, e.g., "0.000347 1" [30 seconds/86400, 1 meter])
 ```
 
-### Visualize data via calm.whoi.edu host
+### Visualize data 
 Data from dash_data\data folder can then be copied into 
 ```
 \\vast.whoi.edu\proj\nes-lter\stingray_dashboard\dash_data\data
 ```
-The dash board can then be accessed via [https://amplify-stingraydash.whoi.edu/](https://amplify-stingraydash.whoi.edu/)
+The dash board can then be accessed via [https://stingraydash.whoi.edu/](https://stingraydash.whoi.edu/)
 
 
 ### OR run the visualization app on your own, required plotly, dash
