@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 from scipy.io import loadmat
+import logging
 
 
 # column_mappings.py
@@ -60,53 +61,53 @@ sled_units = {
 }
 
 calibration_data = {
-        "chlorophyll": {
-            "2019": {'scale_factor': 0.0073, 'dark_count': 48},
-            "2021": {'scale_factor': 0.0073, 'dark_count': 51},
-            "function": lambda raw, scale_factor, dark_count: scale_factor * (raw - dark_count)
-        },
-        "backscatter": {
-            "2019": {'scale_factor': 1.684e-06, 'dark_count': 48},
-            "2021": {'scale_factor': 1.861e-06, 'dark_count': 46},
-            "function": lambda raw, scale_factor, dark_count: scale_factor * (raw - dark_count)
-        },
-        "par": {
-            "2019": {'a0': 0.983748497, 'a1': 8.129573432e-01, 'Im': 1.3589},
-            "2021": {'a0': 0.942280491, 'a1': 8.215386e-01, 'Im': 1.3589},
-            "function": lambda raw, a0, a1, Im: Im * 10 ** ((raw - a0) / a1)
-        },
-        
-        "gps": {
-            "function": lambda raw: np.floor(raw / 100) + (raw % 100) / 60
-        }
-    }
+    "chlorophyll": {
+        "units": "µg/L",
+        "default_year": "2021",
+        "2019": {"params": {"scale_factor": 0.0073, "dark_count": 48}},
+        "2021": {"params": {"scale_factor": 0.0073, "dark_count": 51}},
+        "function": lambda raw, scale_factor, dark_count: scale_factor * (raw - dark_count)
+    },
+    "backscatter": {
+        "units": "1/m sr",
+        "default_year": "2021",
+        "2019": {"params": {"scale_factor": 1.684e-06, "dark_count": 48}},
+        "2021": {"params": {"scale_factor": 1.861e-06, "dark_count": 46}},
+        "function": lambda raw, scale_factor, dark_count: scale_factor * (raw - dark_count)
+    },
+    "par": {
+        "units": "µmol photons m⁻² s⁻¹",
+        "default_year": "2021",
+        "2019": {"params": {"a0": 0.983748497, "a1": 8.129573432e-01, "Im": 1.3589}},
+        "2021": {"params": {"a0": 0.942280491, "a1": 8.215386e-01, "Im": 1.3589}},
+        "function": lambda raw, a0, a1, Im: Im * 10 ** ((raw - a0) / a1)
+    },
+}
 
 # Stingray sensor processing functions
-def calibrate(sensor_type, raw_value, year=None):
+def calibrate(sensor_type, raw_value, year=None, sign=None):
     """
     Apply the calibration function to raw sensor data.
-    
-    :param sensor_type: str, type of sensor ("chlorophyll", "backscatter", "par").
+
+    :param sensor_type: str, type of sensor ("chlorophyll", "backscatter", "par", "gps").
     :param raw_value: float, raw sensor reading.
-    :param year: str, year of calibration ("2019" or "2021" where applicable).
+    :param year: str, calibration year (required for non-GPS sensors; defaults to latest if not provided).
+    :param sign: str, "N", "S", "E", "W" for GPS.
     :return: float, calibrated value.
     """  
-    
+
     if sensor_type not in calibration_data:
         raise ValueError(f"Unknown sensor type: {sensor_type}")
 
     sensor_info = calibration_data[sensor_type]
-    
-    # Get calibration function and parameters
     calibration_func = sensor_info["function"]
-    
-    if year:
-        params = sensor_info[year]
-        # Apply function with extracted parameters
-        return calibration_func(raw_value, **params)
-    
-    else:
-        return calibration_func(raw_value)
+
+    # Use default_year if not provided
+    year = year or sensor_info.get("default_year")
+    if year not in sensor_info:
+        raise ValueError(f"No calibration available for {sensor_type} in year {year}")
+    params = sensor_info[year]["params"]
+    return calibration_func(raw_value, **params)
 
 ## SUNA data processing functions
 # Function to parse MATLAB .mat file to python dictionary
@@ -452,7 +453,7 @@ def calibrate_nitrate(df, CRUISE, nitrate_col='NitrateConcentration[uM]', dark_c
 
     # Find the corresponding CAL file for the cruise
     try:
-        cal_file = next(file for file in os.listdir(cal_dir) if CRUISE in file)
+        cal_file = next(file for file in os.listdir(cal_dir) if CRUISE.upper() in file)
         cal_path = os.path.join(cal_dir, cal_file)
     except StopIteration:
         print(f'No calibration file found for cruise {CRUISE}, using raw nitrate values.')
@@ -503,6 +504,11 @@ def calibrate_nitrate(df, CRUISE, nitrate_col='NitrateConcentration[uM]', dark_c
 
     print(f'Calibration file found for cruise {CRUISE}, TSP correction applied.')
     return out['data'][:, 6]
+
+# Convert GPS
+def convert_gps(raw_series, sign_series):
+    signs = sign_series.map({'N': 1, 'S': -1, 'E': 1, 'W': -1})
+    return signs * (np.floor(raw_series / 100) + (raw_series % 100) / 60)
 
 ### Date processing functions
 
@@ -595,68 +601,92 @@ def read_csv_parallel(file_list, max_workers=None):
     """
     Reads multiple CSV files in parallel using ThreadPoolExecutor and concatenates them into a single DataFrame.
     Exceptions are handled directly in the parallel process.
-    
-    Parameters:
-    - file_list (list): A list of file paths to CSV files.
-    - max_workers (int): The maximum number of worker threads to use. If not provided, it will use all available CPUs minus one.
-    
-    Returns:
-    - concatenated_df (pandas.DataFrame): A single DataFrame containing the data from all the CSV files.
     """
+    import pandas as pd
+    import os, concurrent.futures
+
     def safe_read_csv(file):
         try:
             return pd.read_csv(file)
         except Exception as e:
             print(f"Failed to read {file}: {e}")
-            return pd.DataFrame()  # Return empty DataFrame if reading fails
+            return pd.DataFrame()  # Empty if failed
 
-    # Determine the number of workers based on available CPUs and number of files
+    # Pick sensible number of workers
     if max_workers is None:
-        max_workers = min(os.cpu_count() - 1, len(file_list))
-    
-    # Use ThreadPoolExecutor to read files in parallel
+        max_workers = min(os.cpu_count() - 1, 1)
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         dfs = list(executor.map(safe_read_csv, file_list))
 
-    # Concatenate the results into a single DataFrame
-    concatenated_df = pd.concat(dfs, ignore_index=True)
-    
+    # ⚠️ Filter out empty DataFrames to avoid deprecated concat([]) call
+    dfs = [df for df in dfs if not df.empty]
+
+    if dfs:  # only concat if we actually have data
+        concatenated_df = pd.concat(dfs, ignore_index=True)
+    else:
+        concatenated_df = pd.DataFrame()
+
     return concatenated_df
 
-# Example usage
-# filtered_files = [list of your csv file paths]
-# concatenated_df = read_and_concat_csv_parallel(filtered_files)
-# print(concatenated_df)
-
-# Funciton to get the list of files in the directory
-def filter_csv(dir_root, start_date, end_date = None):
+def build_file_index(dir_root):
     """
-    Filters CSV files in the specified directory based on the date embedded in the filename.
-
-    Parameters:
-    - dir_root (str): The directory containing the CSV files.
-    - start_date (datetime): The start of the date range for filtering.
-    - end_date (datetime): The end of the date range for filtering.
-
-    Returns:
-    - file_filter (list): A list of filtered file paths based on the date range.
+    Scan directory and return a list of (datetime, filepath) pairs.
     """
-    # Get list of all .csv files in the directory
-    list_all = glob.glob(f'{dir_root}/*.csv')
-    
-    # Extract date from the filename and associate it with the file path
-    # Get base name, remove anything before the first '-' and remove the extension (after the last '.')
-    base = np.array([[datetime.strptime(os.path.basename(file).rsplit('.', 1)[0].split('-', 1)[1], '%Y-%m-%d %H-%M-%S.%f'), file] for file in list_all])
+    import glob, os
+    from datetime import datetime
 
-    # If end_date is not provided, set it to a far future date to include all files after start_date
+    list_of_pairs = []
+    list_all = glob.glob(f"{dir_root}/*.csv")
+
+    for file in list_all:
+        try:
+            basename = os.path.basename(file).rsplit(".", 1)[0]
+            date_str = basename.split("-", 1)[1]  # after first dash
+            file_date = datetime.strptime(date_str, "%Y-%m-%d %H-%M-%S.%f")
+            list_of_pairs.append((file_date, file))
+        except Exception as e:
+            print(f"⚠️ Skipped {file}: {e}")
+
+    return list_of_pairs
+
+def filter_file_index(file_index_df, start_date, end_date):
+    """Filter file index DataFrame for files within a given date range (inclusive)."""
+    if "datetime" not in file_index_df.columns:
+        raise ValueError("file_index_df must contain a 'datetime' column")
+
     if end_date is None:
         end_date = datetime.max
-        
-    # Filter files based on the date range
-    list_filter = base[:, 1][(base[:, 0] >= start_date) & (base[:, 0] <= end_date)]
-    
-    return list_filter.tolist()
+    else:
+        end_date = end_date + timedelta(days=1)  # make inclusive
 
+    mask = (file_index_df["datetime"] >= start_date) & (file_index_df["datetime"] < end_date)
+    return file_index_df.loc[mask, "filepath"].tolist()
+
+
+def save_file_index(dir_root, out_file):
+    """Build and save index as CSV with standardized column names."""
+    index = build_file_index(dir_root)
+    df = pd.DataFrame(index, columns=["datetime", "filepath"])
+    df.to_csv(out_file, index=False)
+    return df
+
+
+def load_or_build_file_index(dir_root, out_file, overwrite=False):
+    """
+    Load an existing CSV index if available, or build a new one.
+    """
+    if os.path.exists(out_file) and not overwrite:
+        logging.info(f"Using cached index: {out_file}")
+        df = pd.read_csv(out_file, parse_dates=["datetime"])
+    else:
+        if overwrite:
+            logging.info(f"Rebuilding index (overwrite requested): {out_file}")
+        else:
+            logging.info(f"No cached index found. Building new index: {out_file}")
+        df = save_file_index(dir_root, out_file)
+
+    return df
 
 
 # Function to merge two dataframes using merge_asof and optionally mask duplicates

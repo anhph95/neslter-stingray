@@ -15,7 +15,7 @@ def cli():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Process sensor and media data for a given cruise.")
     parser.add_argument('--cruise', type=str, required=True, help='Cruise ID, required, e.g. EN706')
-    parser.add_argument('--sensor_dir', type=str, default='rawdata', help='Path to the sensor data, default is rawdata')
+    parser.add_argument('--sensor_dir', type=str, default='raw_data', help='Path to the sensor data, default is raw_data')
     parser.add_argument('--media_dir', type=str, default='medialist', help='Path to the media data, default is medialist')
     parser.add_argument('--bin_cols', type=str, nargs='+', default=['matdate', 'depth'],
                         help='Columns to bin (space-separated list, e.g., \"matdate depth\")')
@@ -28,7 +28,7 @@ def main():
     cruise, sensor_dir, media_dir = args.cruise, args.sensor_dir, args.media_dir
     cols, steps = args.bin_cols, args.bin_steps
 
-    pathlib.Path('dash_data').mkdir(parents=True, exist_ok=True)
+    pathlib.Path('dash_data/data').mkdir(parents=True, exist_ok=True)
 
     # Find matching sensor file
     try:
@@ -71,9 +71,14 @@ def main():
     df_bin = bin_data(df, cols, steps)
     df_bin['group'] = pd.factorize(pd.MultiIndex.from_arrays([df_bin[f'{col}_bin'] for col in cols]))[0]
 
-    sensor_cols = sensor_df.columns[3:].to_list()
+    sensor_cols = [col for col in sensor_df.columns if col not in ['timestamp', 'times', 'matdate','depth']]
     meta_cols = [col for col in df.columns if col not in sensor_cols]
 
+    # Replace raw binning cols with their _bin equivalents
+    for col in [c for c in cols if c not in ['timestamp', 'times', 'matdate']]:
+        if col in meta_cols:
+            meta_cols = [c for c in meta_cols if c != col] + [f"{col}_bin"]
+    
     df_mean = df_bin.groupby('group').agg(
         {col: 'first' for col in meta_cols} |
         {col: ['mean', 'std'] for col in sensor_cols}
@@ -83,6 +88,10 @@ def main():
         col[0] if col[1] in ['first', 'mean'] else f"{col[0]}_{col[1]}" for col in df_mean.columns
     ]
 
+    # Rename binned versions back to original names
+    rename_map = {f"{col}_bin": col for col in cols if f"{col}_bin" in df_mean.columns}
+    df_mean = df_mean.rename(columns=rename_map)
+    
     date_string = df_mean['times'][0].strftime('%Y%m%d')
     output_file = f'dash_data/data/{date_string}_{cruise}.csv'
     df_mean.to_csv(output_file, encoding='utf-8', index=False)

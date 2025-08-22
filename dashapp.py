@@ -103,14 +103,17 @@ n_process = min(os.cpu_count()-1, 8)
 work_dir = Path('/dash_data') if Path('/dash_data').is_dir() else Path('dash_data')
 data_dir, misc_dir = work_dir / 'data', work_dir / 'misc'
 
-def load_data(file_name):
+def load_data(file_name, sub_sample=True):
     '''Load CSV file into a DataFrame and preprocess it.'''
     df = pd.read_csv(f'{data_dir}/{file_name}.csv', low_memory=False)
     if not pd.api.types.is_datetime64_any_dtype(df['times']):
         df['times'] = pd.to_datetime(df['times'], errors='coerce', cache=True)
     for col in ['media', 'frame', 'media_path', 'link']:
         df[col] = df.get(col, np.nan)
-    return df
+    if sub_sample:
+        return df[::3].reset_index(drop=True)
+    else:
+        return df
 
 # Initial dataset
 csv_files = get_csv_files()
@@ -161,16 +164,16 @@ app.layout = html.Div([
             }),
 
             html.Label('Start Date:', style={'font-size': '12px'}),
-            dcc.Input(id='start-date', type='text', placeholder='YYYY-MM-DD', debounce=True,
+            dcc.Input(id='start_date', type='text', placeholder='YYYY-MM-DD', debounce=True,
                 style={'width': '80px', 'font-size': '12px'}),
             html.Label('Start Time:', style={'font-size': '12px'}),
-            dcc.Input(id='start-time', type='text', placeholder='HH:MM:SS', debounce=True,
+            dcc.Input(id='start_time', type='text', placeholder='HH:MM:SS', debounce=True,
                 style={'width': '80px', 'font-size': '12px'}),
             html.Label('End Date:', style={'font-size': '12px'}),
-            dcc.Input(id='end-date', type='text', placeholder='YYYY-MM-DD', debounce=True,
+            dcc.Input(id='end_date', type='text', placeholder='YYYY-MM-DD', debounce=True,
                 style={'width': '80px', 'font-size': '12px'}),
             html.Label('End Time:', style={'font-size': '12px'}),
-            dcc.Input(id='end-time', type='text', placeholder='HH:MM:SS', debounce=True,
+            dcc.Input(id='end_time', type='text', placeholder='HH:MM:SS', debounce=True,
                 style={'width': '80px', 'font-size': '12px'}),
 
             html.Button('Download CSV', id='download-button', style={
@@ -178,7 +181,7 @@ app.layout = html.Div([
                 'color': 'white', 'border': 'none', 'border-radius': '5px', 'cursor': 'pointer',
                 'box-shadow': '2px 2px 5px rgba(0, 0, 0, 0.2)', 'margin-left': '10px', 'transition': '0.3s'
             }),
-            dcc.Download(id='download-dataframe-csv'),
+            dcc.Download(id='download_dataframe_csv'),
         ], style={'display': 'flex', 'align-items': 'center', 'gap': '8px', 'flex-wrap': 'wrap'}),
 
         html.Br(),
@@ -186,25 +189,27 @@ app.layout = html.Div([
         # Row 2
         html.Div([
             html.Label('X-Axis:', style={'font-size': '12px'}),
-            dcc.Dropdown(id='x-axis-variable', value='latitude', clearable=False,
-                options=[{'label': lbl, 'value': val} for lbl, val in [('Latitude', 'latitude'), ('Latitude_bin', 'latitude_bin'), ('Time', 'times')]],
+            dcc.Dropdown(id='x_axis_variable', value='latitude', clearable=False,
+                options=[{'label': lbl, 'value': val} for lbl, val in [('Latitude', 'latitude'), ('Longitude', 'longitude'), ('Time', 'times')]],
                 style={'width': '100px', 'font-size': '12px'}),
             html.Label('Min Depth:', style={'font-size': '12px'}),
-            dcc.Input(id='z-min', type='number', value=0, debounce=True,
+            dcc.Input(id='z_min', type='number', value=0, debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
             html.Label('Max Depth:', style={'font-size': '12px'}),
-            dcc.Input(id='z-max', type='number', value=1000, debounce=True,
+            dcc.Input(id='z_max', type='number', value=200, debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Min Latitude:', style={'font-size': '12px'}),
-            dcc.Input(id='lat-min', type='number', value=39.5, debounce=True,
+            html.Label('Min Coordinate:', style={'font-size': '12px'}),
+            dcc.Input(id='coord_min', type='number', value=39.5, debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Max Latitude:', style={'font-size': '12px'}),
-            dcc.Input(id='lat-max', type='number', value=41.5, debounce=True,
+            html.Label('Max Coordinate:', style={'font-size': '12px'}),
+            dcc.Input(id='coord_max', type='number', value=41.5, debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
             html.Label('Color Variable:', style={'font-size': '12px'}),
-            dcc.Dropdown(id='color-variable', value='temperature', clearable=False,
+            dcc.Dropdown(id='color_variable', value='temperature', clearable=False,
                 options=[{'label': var.capitalize(), 'value': var} for var in sensor_vars],
                 style={'width': '100px', 'font-size': '12px'}),
+            dcc.Checklist(id='sub_sample', options=[{'label': 'Sub-sampling', 'value': 'True'}], value=['True'],
+                style={'font-size': '12px'}),
             dcc.Checklist(id='bathymetry', options=[{'label': 'Bathymetry', 'value': 'True'}], value=['True'],
                 style={'font-size': '12px'}),
             dcc.Checklist(id='station', options=[{'label': 'Stations', 'value': 'True'}], value=['True'],
@@ -216,30 +221,30 @@ app.layout = html.Div([
         # Row 3
         html.Div([
             html.Label('Colormap:', style={'font-size': '12px'}),
-            dcc.Dropdown(id='color-map', options=[{'label': cmap, 'value': cmap} for cmap in colormaps], value='Jet',
+            dcc.Dropdown(id='color_map', options=[{'label': cmap, 'value': cmap} for cmap in colormaps], value='Jet',
                 clearable=False, style={'width': '100px', 'font-size': '12px'}),
             html.Label('Color Min:', style={'font-size': '12px'}),
-            dcc.Input(id='vmin-input', type='number', step=0.01, debounce=True,
+            dcc.Input(id='v_min', type='number', step=0.01, debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
             html.Label('Color Max:', style={'font-size': '12px'}),
-            dcc.Input(id='vmax-input', type='number', step=0.01, debounce=True,
+            dcc.Input(id='v_max', type='number', step=0.01, debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
             html.Label('Filter Min:', style={'font-size': '12px'}),
-            dcc.Input(id='filter-min', type='number', debounce=True,
+            dcc.Input(id='filter_min', type='number', debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
             html.Label('Filter Max:', style={'font-size': '12px'}),
             dcc.Input(id='filter-max', type='number', debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
             html.Label('Filter Opacity:', style={'font-size': '12px'}),
-            dcc.Input(id='hidden-opacity', type='number', value=0.05, step=0.01, debounce=True,
+            dcc.Input(id='hidden_opacity', type='number', value=0.05, step=0.01, debounce=True,
                 style={'width': '60px', 'font-size': '12px'}),
             html.Label('Fig Width:', style={'font-size': '12px'}),
-            dcc.Input(id='fig-width', type='number', value=None, debounce=True,
+            dcc.Input(id='fig_width', type='number', value=None, debounce=True,
                 style={'width': '70px', 'font-size': '12px'}),
             html.Label('Fig Height:', style={'font-size': '12px'}),
-            dcc.Input(id='fig-height', type='number', value=None, debounce=True,
+            dcc.Input(id='fig_height', type='number', value=None, debounce=True,
                 style={'width': '70px', 'font-size': '12px'}),
-            dcc.Store(id='user-range-change', data=False),
+            dcc.Store(id='user_range_change', data=False),
         ], style={'display': 'flex', 'align-items': 'center', 'gap': '8px', 'flex-wrap': 'wrap'}),
 
     ], style={
@@ -322,20 +327,20 @@ def update_file_list(n_clicks):
 # --- Callback: Update date and time range based on selected CSV file or section plot ---
 @app.callback(
     [
-        Output('start-date', 'value'),
-        Output('end-date', 'value'),
-        Output('start-time', 'value'),
-        Output('end-time', 'value')
+        Output('start_date', 'value'),
+        Output('end_date', 'value'),
+        Output('start_time', 'value'),
+        Output('end_time', 'value')
     ],
     [
         Input('csv-selector', 'value'),
         Input('section-plot', 'selectedData')
     ],
     [
-        State('start-date', 'value'),
-        State('end-date', 'value'),
-        State('start-time', 'value'),
-        State('end-time', 'value')
+        State('start_date', 'value'),
+        State('end_date', 'value'),
+        State('start_time', 'value'),
+        State('end_time', 'value')
     ],
 )
 def update_time_range(csv_file, selected_data, start_date, end_date, start_time, end_time):
@@ -377,14 +382,14 @@ def update_time_range(csv_file, selected_data, start_date, end_date, start_time,
 # --- Callback: Update color variable options based on selected CSV file ---
 @app.callback(
     [
-        Output('color-variable', 'options'),
-        Output('color-variable', 'value')
+        Output('color_variable', 'options'),
+        Output('color_variable', 'value')
     ],
     [
         Input('csv-selector', 'value')
     ],
     [
-        State('color-variable', 'value')
+        State('color_variable', 'value')
     ],
     prevent_initial_call=True
 )
@@ -403,26 +408,28 @@ def update_color_variable_options(csv_file, current_color):
 
 @app.callback(
     [
-        Output('vmin-input', 'value'),
-        Output('vmax-input', 'value')
+        Output('v_min', 'value'),
+        Output('v_max', 'value')
     ],
-    Input('color-variable', 'value'),
+    Input('color_variable', 'value'),
     prevent_initial_call=True
 )
+
 def reset_vmin_vmax(color_var):
     return None, None
 
 # --- Callback: Section plot for time-latitude selection ---
 @app.callback(
     Output('section-plot', 'figure'),
-    Input('csv-selector', 'value')
+    Input('csv-selector', 'value'),
+    Input('sub_sample', 'value')
 )
 
-def draw_section_plot(csv_file):
+def draw_section_plot(csv_file, sub_sample):
     if not csv_file:
         return px.scatter()
 
-    df = load_data(csv_file)
+    df = load_data(csv_file, sub_sample=sub_sample)
 
     # Basic time-latitude scatter plot
     fig = px.scatter(df, x='times', y='latitude')
@@ -469,29 +476,29 @@ def store_selection_range(selectedData):
 
 # --- Callback: Track user range changes ---
 @app.callback(
-    Output('user-range-change', 'data'),
+    Output('user_range_change', 'data'),
     [
-        Input('lat-min', 'value'),
-        Input('lat-max', 'value'),
-        Input('z-min', 'value'),
-        Input('z-max', 'value')
+        Input('coord_min', 'value'),
+        Input('coord_max', 'value'),
+        Input('z_min', 'value'),
+        Input('z_max', 'value')
     ],
     [
-        State('lat-min', 'value'),
-        State('lat-max', 'value'),
-        State('z-min', 'value'),
-        State('z-max', 'value'),
-        State('user-range-change', 'data')
+        State('coord_min', 'value'),
+        State('coord_max', 'value'),
+        State('z_min', 'value'),
+        State('z_max', 'value'),
+        State('user_range_change', 'data')
     ],
     prevent_initial_call=True
 )
-def track_range_change(latmin, latmax, ymin, ymax,
-                       prev_latmin, prev_latmax, prev_ymin, prev_ymax,
+def track_range_change(coord_min, coord_max, ymin, ymax,
+                       prev_coord_min, prev_coord_max, prev_ymin, prev_ymax,
                        was_changed):
     # Compare with previous values
     changed = any([
-        latmin != prev_latmin,
-        latmax != prev_latmax,
+        coord_min != prev_coord_min,
+        coord_max != prev_coord_max,
         ymin != prev_ymin,
         ymax != prev_ymax
     ])
@@ -499,7 +506,7 @@ def track_range_change(latmin, latmax, ymin, ymax,
 
 # # --- Callback: Download CSV file ---
 # @app.callback(
-#     Output('download-dataframe-csv', 'data'),
+#     Output('download_dataframe_csv', 'data'),
 #     Input('download-button', 'n_clicks'),
 #     State('csv-selector', 'value'),
 #     prevent_initial_call=True
@@ -518,32 +525,34 @@ def track_range_change(latmin, latmax, ymin, ymax,
     ],
     [
         Input('csv-selector', 'value'),
-        Input('start-date', 'value'),
-        Input('start-time', 'value'),
-        Input('end-date', 'value'),
-        Input('end-time', 'value'),
-        Input('x-axis-variable', 'value'),
-        Input('color-variable', 'value'),
-        Input('color-map', 'value'),
-        Input('vmin-input', 'value'),
-        Input('vmax-input', 'value'),
-        Input('z-min', 'value'),
-        Input('z-max', 'value'),
-        Input('lat-min', 'value'),
-        Input('lat-max', 'value'),
-        Input('filter-min', 'value'),
+        Input('sub_sample', 'value'),
+        Input('start_date', 'value'),
+        Input('start_time', 'value'),
+        Input('end_date', 'value'),
+        Input('end_time', 'value'),
+        Input('x_axis_variable', 'value'),
+        Input('color_variable', 'value'),
+        Input('color_map', 'value'),
+        Input('v_min', 'value'),
+        Input('v_max', 'value'),
+        Input('z_min', 'value'),
+        Input('z_max', 'value'),
+        Input('coord_min', 'value'),
+        Input('coord_max', 'value'),
+        Input('filter_min', 'value'),
         Input('filter-max', 'value'),
-        Input('hidden-opacity', 'value'),
-        Input('fig-width', 'value'),
-        Input('fig-height', 'value'),
+        Input('hidden_opacity', 'value'),
+        Input('fig_width', 'value'),
+        Input('fig_height', 'value'),
         Input('bathymetry', 'value'),
         Input('station', 'value'),
-        Input('user-range-change', 'data')
+        Input('user_range_change', 'data')
     ]
 )
-def update_plot(csv_file, start_date, start_time, end_date,  end_time,
+
+def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_time,
                 x_axis, color_var, color_map, vmin, vmax,
-                zmin, zmax, latmin, latmax, filter_min, filter_max,
+                zmin, zmax, coord_min, coord_max, filter_min, filter_max,
                 hidden_opacity, fig_width, fig_height,
                 bathymetry, station, user_changed_range):
 
@@ -551,7 +560,7 @@ def update_plot(csv_file, start_date, start_time, end_date,  end_time,
         return px.scatter(), []
 
     # Load and filter data
-    df = load_data(csv_file)
+    df = load_data(csv_file, sub_sample=sub_sample)
     sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
     
     # Check x_axis variable
@@ -596,7 +605,7 @@ def update_plot(csv_file, start_date, start_time, end_date,  end_time,
     )
 
     # Optional overlays
-    if 'True' in bathymetry and (x_axis == 'latitude' or x_axis == 'latitude_bin'):
+    if 'True' in bathymetry and bathy is not None and x_axis == 'latitude':
         fig.add_trace(go.Scatter(
             x=bathy['latitude'],
             y=bathy['bottom_depth_meters'],
@@ -606,7 +615,7 @@ def update_plot(csv_file, start_date, start_time, end_date,  end_time,
             showlegend=False
         ))
 
-    if 'True' in station and stations is not None and (x_axis == 'latitude' or x_axis == 'latitude_bin'):
+    if 'True' in station and stations is not None and x_axis == 'latitude':
         fig.update_layout(
             annotations=[
                 dict(x=lat, y=1.05, xref='x', yref='paper', text=label,
@@ -621,8 +630,10 @@ def update_plot(csv_file, start_date, start_time, end_date,  end_time,
         )
 
     # X-axis range logic (latitude has priority)
-    if (x_axis == 'latitude' or x_axis == 'latitude_bin') and latmin is not None and latmax is not None:
-        x_range = [latmax, latmin]
+    if (x_axis == 'latitude') and coord_min is not None and coord_max is not None:
+        x_range = [coord_max, coord_min]
+    elif (x_axis == 'longitude') and coord_min is not None and coord_max is not None:
+        x_range = [coord_min, coord_max]
     else:
         x_range = [df['times'].min(), df['times'].max()] if x_axis == 'times' else None
 
@@ -669,23 +680,24 @@ def update_plot(csv_file, start_date, start_time, end_date,  end_time,
     Output('ts-plot', 'figure'),
     [
         Input('csv-selector', 'value'),
-        Input('start-date', 'value'),
-        Input('start-time', 'value'),
-        Input('end-date', 'value'),
-        Input('end-time', 'value'),
-        Input('color-variable', 'value'),
-        Input('color-map', 'value'),
-        Input('vmin-input', 'value'),
-        Input('vmax-input', 'value'),
-        Input('filter-min', 'value'),
+        Input('sub_sample', 'value'),
+        Input('start_date', 'value'),
+        Input('start_time', 'value'),
+        Input('end_date', 'value'),
+        Input('end_time', 'value'),
+        Input('color_variable', 'value'),
+        Input('color_map', 'value'),
+        Input('v_min', 'value'),
+        Input('v_max', 'value'),
+        Input('filter_min', 'value'),
         Input('filter-max', 'value'),
-        Input('hidden-opacity', 'value'),
-        Input('fig-width', 'value'),
-        Input('fig-height', 'value'),
+        Input('hidden_opacity', 'value'),
+        Input('fig_width', 'value'),
+        Input('fig_height', 'value'),
         Input('filtered-selection-range', 'data')
     ]
 )
-def update_ts_plot(csv_file, start_date, start_time, end_date,  end_time,
+def update_ts_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_time,
                    color_var, color_map, vmin, vmax,
                    filter_min, filter_max, hidden_opacity,
                    fig_width, fig_height, select_range):
@@ -693,7 +705,7 @@ def update_ts_plot(csv_file, start_date, start_time, end_date,  end_time,
     if not csv_file:
         return px.scatter()
 
-    df = load_data(csv_file)
+    df = load_data(csv_file, sub_sample=sub_sample)
     df = df.dropna(subset=['temperature', 'salinity'])
 
     sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
@@ -801,25 +813,26 @@ def update_ts_plot(csv_file, start_date, start_time, end_date,  end_time,
     Output('profile-plot', 'figure'),
     [
         Input('csv-selector', 'value'),
-        Input('start-date', 'value'),
-        Input('start-time', 'value'),
-        Input('end-date', 'value'),
-        Input('end-time', 'value'),
-        Input('color-variable', 'value'),
-        Input('color-map', 'value'),
-        Input('vmin-input', 'value'),
-        Input('vmax-input', 'value'),
-        Input('z-min', 'value'),
-        Input('z-max', 'value'),
-        Input('filter-min', 'value'),
+        Input('sub_sample', 'value'),
+        Input('start_date', 'value'),
+        Input('start_time', 'value'),
+        Input('end_date', 'value'),
+        Input('end_time', 'value'),
+        Input('color_variable', 'value'),
+        Input('color_map', 'value'),
+        Input('v_min', 'value'),
+        Input('v_max', 'value'),
+        Input('z_min', 'value'),
+        Input('z_max', 'value'),
+        Input('filter_min', 'value'),
         Input('filter-max', 'value'),
-        Input('hidden-opacity', 'value'),
-        Input('fig-width', 'value'),
-        Input('fig-height', 'value'),
+        Input('hidden_opacity', 'value'),
+        Input('fig_width', 'value'),
+        Input('fig_height', 'value'),
         Input('filtered-selection-range', 'data')
     ]
 )
-def update_profile_plot(csv_file, start_date, start_time, end_date,  end_time,
+def update_profile_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_time,
                         color_var, color_map, vmin, vmax, zmin, zmax,
                         filter_min, filter_max, hidden_opacity,
                         fig_width, fig_height, select_range):
@@ -827,7 +840,7 @@ def update_profile_plot(csv_file, start_date, start_time, end_date,  end_time,
     if not csv_file:
         return px.scatter()
 
-    df = load_data(csv_file)
+    df = load_data(csv_file, sub_sample=sub_sample)
 
     # Apply value filter
     if filter_min is not None and filter_max is not None:

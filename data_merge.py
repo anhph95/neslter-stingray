@@ -23,6 +23,8 @@ def cli():
                         help='Cruise start date (YYYY-MM-DD), required')
     parser.add_argument('--end_date', type=str, required=True, 
                         help='Cruise end date (YYYY-MM-DD), required')
+    parser.add_argument('--overwrite_index', action='store_true',
+                        help='Overwrite existing index files')
     return parser.parse_args()
 
 def main():
@@ -31,29 +33,63 @@ def main():
         args.cal_year = str(args.cal_year)
         start_date = datetime.strptime(args.start_date, '%Y-%m-%d')
         end_date = datetime.strptime(args.end_date, '%Y-%m-%d')
-        pathlib.Path('rawdata').mkdir(parents=True, exist_ok=True)
-
+        pathlib.Path('raw_data').mkdir(parents=True, exist_ok=True)
+        pathlib.Path("indexes").mkdir(parents=True, exist_ok=True)
+        
         # Load sensor data
         logging.info("Reading sensor data...")
-        ctd = read_csv_parallel(filter_csv(f'{args.path}/CTD', start_date, end_date))
-        dvl = read_csv_parallel(filter_csv(f'{args.path}/DVL', start_date, end_date))
-        fluorometer = read_csv_parallel(filter_csv(f'{args.path}/Fluorometer', start_date, end_date))
-        gps = read_csv_parallel(filter_csv(f'{args.path}/GPS', start_date, end_date))
-        oxygen = read_csv_parallel(filter_csv(f'{args.path}/Oxygen', start_date, end_date))
-        par = read_csv_parallel(filter_csv(f'{args.path}/PAR', start_date, end_date))
-        nitrate = read_csv_parallel(filter_csv(f'{args.path}/SUNA', start_date, end_date))
+        
+        sensor_dirs = [
+            "CTD",
+            "DVL",
+            "Fluorometer",
+            "GPS",
+            "Oxygen",
+            "PAR",
+            "SUNA"
+        ]
+
+        data = {}
+        for sensor in sensor_dirs:
+            sensor_path = f"{args.path}/{sensor}"
+            index_file  = f"indexes/{sensor}_index.csv"
+
+            # Load or build index
+            file_index_df = load_or_build_file_index(sensor_path, index_file, overwrite=args.overwrite_index)
+
+            # Filter files for this cruise
+            filtered_files = filter_file_index(file_index_df, start_date, end_date)
+            df = read_csv_parallel(filtered_files)
+            data[sensor.lower()] = df
+
+        # Safety check
+        if all(df.empty for df in data.values()):
+            logging.error(f"No sensor files found for {args.cruise}. Aborting.")
+            return
+
+        ctd = data['ctd']
+        if ctd.empty:
+            logging.error("CTD data is missing. Cannot continue without CTD.")
+            return
+
+        dvl = data['dvl']
+        fluorometer = data['fluorometer']
+        gps = data['gps']
+        oxygen = data['oxygen']
+        par = data['par']
+        nitrate = data['suna']
 
         # Merge all data
         logging.info("Processing CTD data...")
-        ctd['Density_IES80'] = ies80(ctd['Salinity'], ctd['Temperature'], ctd['Pressure'] / 10)
+        ctd['Density'] = ies80(ctd['Salinity'], ctd['Temperature'], ctd['Pressure'] / 10)
         ctd['Times'], ctd['matdate'] = convert_timestamp(ctd['Timestamp'])
         sled = ctd[['Timestamp', 'Times', 'matdate', 'Temperature', 'Conductivity', 
-                    'Pressure', 'Depth', 'Salinity', 'Sound Velocity', 'Density', 'Density_IES80']].copy()
+                    'Pressure', 'Depth', 'Salinity', 'Sound Velocity', 'Density']].copy()
 
         # Merge GPS data
         if not gps.empty:
-            gps['Latitude'] = calibrate('gps', gps['Latitude'])
-            gps['Longitude'] = calibrate('gps', gps['Longitude'])
+            gps['Latitude'] = convert_gps(gps['Latitude'], gps['Latitude Hemisphere'])
+            gps['Longitude'] = convert_gps(gps['Longitude'], gps['Longitude Hemisphere'])
             sled = merge_df(sled, gps, on='Timestamp', cols=['Latitude', 'Longitude'], direction='nearest', duplicates=True)
         else:
             logging.warning("GPS data is missing. Skipping GPS merge.")
@@ -66,15 +102,15 @@ def main():
         
         # Merge Fluorometer data
         if not fluorometer.empty:
-            fluorometer['Chlorophyll'] = calibrate('chlorophyll', fluorometer['Chlorophyll'], args.cal_year)
-            fluorometer['Backscattering'] = calibrate('backscatter', fluorometer['Backscattering'], args.cal_year)
+            fluorometer['Chlorophyll'] = calibrate('chlorophyll', fluorometer['Chlorophyll'], year=args.cal_year)
+            fluorometer['Backscattering'] = calibrate('backscatter', fluorometer['Backscattering'], year=args.cal_year)
             sled = merge_df(sled, fluorometer, on='Timestamp', cols=['Chlorophyll', 'Backscattering'])
         else:
             logging.warning("Fluorometer data is missing. Skipping Fluorometer merge.")
         
         # Merge PAR data
         if not par.empty:
-            par['Raw PAR [V]'] = calibrate('par', par['Raw PAR [V]'], args.cal_year)
+            par['Raw PAR [V]'] = calibrate('par', par['Raw PAR [V]'], year=args.cal_year)
             sled = merge_df(sled, par, on='Timestamp', cols=['Raw PAR [V]'])
         else:
             logging.warning("PAR data is missing. Skipping PAR merge.")
@@ -97,7 +133,7 @@ def main():
         sled.rename(columns=sled_columns, inplace=True)
 
         # Save output CSV
-        output_filename = f'rawdata/{start_date.strftime("%Y%m%d")}_{args.cruise}.csv'
+        output_filename = f'raw_data/{start_date.strftime("%Y%m%d")}_{args.cruise}.csv'
         sled.to_csv(output_filename, encoding='utf-8', index=False)
         logging.info(f"Data merge completed! File saved as {output_filename}")
 
