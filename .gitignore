@@ -2,6 +2,7 @@
 *.csv
 *.CAL
 *.ipynb
+*.html
 
 # Keep misc file
 !dash_data/misc/
