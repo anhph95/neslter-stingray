@@ -1,0 +1,13 @@
+services:
+  dash:
+    build: .
+    container_name: dashapp
+    ports:
+      - "8050:8050"
+    volumes:
+      # Mount only the data folder for auto-refresh
+      - ./dash_data:/app/dash_data
+    environment:
+      - PORT=8050
+      - DASH_DEBUG=1
+    restart: unless-stopped
