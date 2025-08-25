@@ -7,3 +7,5 @@
 # Keep misc file
 !dash_data/misc/
 !dash_data/misc/**
+!assets/
+!assets/**

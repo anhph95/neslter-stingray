@@ -122,9 +122,8 @@ def load_data(file_name, sub_sample=True):
             (df['latitude'].between(-180, 180, inclusive="both"))
         ]
     
-    # Sub-sample if requested
-    if sub_sample:
-        return df[::3].reset_index(drop=True)
+    if sub_sample and sub_sample > 0:  # ✅ apply only if > 0
+        return df.iloc[::sub_sample, :].reset_index(drop=True)
     else:
         return df.reset_index(drop=True)
 
@@ -144,185 +143,346 @@ colormaps = [name for name in px.colors.sequential.__dict__ if not name.startswi
 load_csv = lambda file: pd.read_csv(file, dtype=str, encoding="utf-8") if file.exists() else None
 stations, bathy = map(load_csv, [misc_dir / 'NESLTER_station_list.csv', misc_dir / 'NESLTER_transect_bathymetry.csv'])
 stations['latitude'] = pd.to_numeric(stations['latitude'], errors='coerce')
+bathy['latitude'] = pd.to_numeric(bathy['latitude'], errors='coerce')
 
+# ========================
 # App Layout
+# ========================
+
 app.layout = html.Div([
-    html.Div([
-        html.Span('NES-LTER Stingray Dashboard', 
-            style={'color': 'white', 'fontSize': '24px', 'fontWeight': 'bold', 'padding': '10px'}),
-        html.Span('Written by: Anh H. Pham | anh.pham@whoi.edu', 
-            style={'font-size': '14px', 'color': 'white', 'padding': '10px'}),
-    ], style={
-        'display': 'flex',
-        'justify-content': 'space-between',
-        'align-items': 'center',
-        'backgroundColor': '#3D4451',
-        'width': '100%',
-        'border-radius': '5px',
-        'box-shadow': '0px 2px 5px rgba(0,0,0,0.1)'
-    }),
 
+    # ===== TOP HEADER =====
     html.Div([
-        # Row 1
+        # Left side: WHOI Logo
         html.Div([
-            html.Label('Cruise:', style={'font-weight': 'bold', 'font-size': '14px'}),
-            dcc.Dropdown(id='csv-selector',
-                options=[{'label': f, 'value': f} for f in csv_files],
-                value=csv_files[-1] if csv_files else None, clearable=False,
-                style={'width': '140px', 'font-size': '12px'}),
-            html.Button('Refresh', id='refresh-button', n_clicks=0, style={
-                'font-size': '12px', 'padding': '5px 5px', 'background-color': '#007BFF',
-                'color': 'white', 'border': 'none', 'border-radius': '5px', 'cursor': 'pointer',
-                'box-shadow': '2px 2px 5px rgba(0, 0, 0, 0.2)', 'margin-left': '10px', 'transition': '0.3s'
-            }),
-
-            html.Label('Start Date:', style={'font-size': '12px'}),
-            dcc.Input(id='start_date', type='text', placeholder='YYYY-MM-DD', debounce=True,
-                style={'width': '80px', 'font-size': '12px'}),
-            html.Label('Start Time:', style={'font-size': '12px'}),
-            dcc.Input(id='start_time', type='text', placeholder='HH:MM:SS', debounce=True,
-                style={'width': '80px', 'font-size': '12px'}),
-            html.Label('End Date:', style={'font-size': '12px'}),
-            dcc.Input(id='end_date', type='text', placeholder='YYYY-MM-DD', debounce=True,
-                style={'width': '80px', 'font-size': '12px'}),
-            html.Label('End Time:', style={'font-size': '12px'}),
-            dcc.Input(id='end_time', type='text', placeholder='HH:MM:SS', debounce=True,
-                style={'width': '80px', 'font-size': '12px'}),
-
-            html.Button('Download CSV', id='download-button', style={
-                'font-size': '12px', 'padding': '5px 5px', 'background-color': '#007BFF',
-                'color': 'white', 'border': 'none', 'border-radius': '5px', 'cursor': 'pointer',
-                'box-shadow': '2px 2px 5px rgba(0, 0, 0, 0.2)', 'margin-left': '10px', 'transition': '0.3s'
-            }),
-            dcc.Download(id='download_dataframe_csv'),
-        ], style={'display': 'flex', 'align-items': 'center', 'gap': '8px', 'flex-wrap': 'wrap'}),
-
-        html.Br(),
-
-        # Row 2
-        html.Div([
-            html.Label('X-Axis:', style={'font-size': '12px'}),
-            dcc.Dropdown(id='x_axis_variable', value='latitude', clearable=False,
-                options=[{'label': lbl, 'value': val} for lbl, val in [('Latitude', 'latitude'), ('Longitude', 'longitude'), ('Time', 'times')]],
-                style={'width': '100px', 'font-size': '12px'}),
-            html.Label('Min Depth:', style={'font-size': '12px'}),
-            dcc.Input(id='z_min', type='number', value=0, debounce=True,
-                style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Max Depth:', style={'font-size': '12px'}),
-            dcc.Input(id='z_max', type='number', value=200, debounce=True,
-                style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Min Coordinate:', style={'font-size': '12px'}),
-            dcc.Input(id='coord_min', type='number', value=39.5, debounce=True,
-                style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Max Coordinate:', style={'font-size': '12px'}),
-            dcc.Input(id='coord_max', type='number', value=41.5, debounce=True,
-                style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Color Variable:', style={'font-size': '12px'}),
-            dcc.Dropdown(id='color_variable', value='temperature', clearable=False,
-                options=[{'label': var.capitalize(), 'value': var} for var in sensor_vars],
-                style={'width': '100px', 'font-size': '12px'}),
-            dcc.Checklist(id='sub_sample', options=[{'label': 'Sub-sampling', 'value': 'True'}], value=['True'],
-                style={'font-size': '12px'}),
-            dcc.Checklist(id='bathymetry', options=[{'label': 'Bathymetry', 'value': 'True'}], value=['True'],
-                style={'font-size': '12px'}),
-            dcc.Checklist(id='station', options=[{'label': 'Stations', 'value': 'True'}], value=['True'],
-                style={'font-size': '12px'}),
-        ], style={'display': 'flex', 'align-items': 'center', 'gap': '8px', 'flex-wrap': 'wrap'}),
-
-        html.Br(),
-
-        # Row 3
-        html.Div([
-            html.Label('Colormap:', style={'font-size': '12px'}),
-            dcc.Dropdown(id='color_map', options=[{'label': cmap, 'value': cmap} for cmap in colormaps], value='Jet',
-                clearable=False, style={'width': '100px', 'font-size': '12px'}),
-            html.Label('Color Min:', style={'font-size': '12px'}),
-            dcc.Input(id='v_min', type='number', step=0.01, debounce=True,
-                style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Color Max:', style={'font-size': '12px'}),
-            dcc.Input(id='v_max', type='number', step=0.01, debounce=True,
-                style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Filter Min:', style={'font-size': '12px'}),
-            dcc.Input(id='filter_min', type='number', debounce=True,
-                style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Filter Max:', style={'font-size': '12px'}),
-            dcc.Input(id='filter-max', type='number', debounce=True,
-                style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Filter Opacity:', style={'font-size': '12px'}),
-            dcc.Input(id='hidden_opacity', type='number', value=0.05, step=0.01, debounce=True,
-                style={'width': '60px', 'font-size': '12px'}),
-            html.Label('Fig Width:', style={'font-size': '12px'}),
-            dcc.Input(id='fig_width', type='number', value=None, debounce=True,
-                style={'width': '70px', 'font-size': '12px'}),
-            html.Label('Fig Height:', style={'font-size': '12px'}),
-            dcc.Input(id='fig_height', type='number', value=None, debounce=True,
-                style={'width': '70px', 'font-size': '12px'}),
-            dcc.Store(id='user_range_change', data=False),
-        ], style={'display': 'flex', 'align-items': 'center', 'gap': '8px', 'flex-wrap': 'wrap'}),
-
-    ], style={
-        'backgroundColor': '#F0F0F0',
-        'padding': '10px',
-        'border-radius': '5px',
-        'box-shadow': '0px 2px 5px rgba(0,0,0,0.1)'
-    }),
-
-    # Section Plot (full-width) with Store
-    html.Div([
-        dcc.Graph(id='section-plot', style={'width': '100%', 'height': '250px'}),
-        dcc.Store(id='filtered-selection-range')
-    ], style={
-        'backgroundColor': '#F0F0F0',
-        'padding': '10px',
-        'borderRadius': '5px',
-        'boxShadow': '0px 2px 5px rgba(0,0,0,0.1)',
-        'marginBottom': '20px'
-    }),
-
-    # Scatter Plot with Sidebar (Click Output + Store)
-    html.Div([
-        # Scatter Plot (takes most space)
-        dcc.Graph(id='scatter-plot', style={'flex': '7', 'height': '100%'}),
-
-        # Click Output Panel
-        html.Div([
-            html.Div(id='click-output', style={
-                'padding': '10px',
-                'overflowX': 'auto',
-                'textAlign': 'left',
-                'backgroundColor': 'white',
-                'height': '100%'
-            }),
-            dcc.Store(id='available-sensor-vars')
-        ], style={'flex': '3', 'display': 'flex', 'flexDirection': 'column'})
-    ], style={
-        'display': 'flex',
-        'flexDirection': 'row',
-        'alignItems': 'stretch',
-        'height': '500px',
-        'marginBottom': '20px'
-    }),
-
-    # TS Plot and Profile Plot (side-by-side)
-    html.Div([
-        dcc.Graph(id='ts-plot', style={
-            'width': '550px',
-            'height': '500px',
-            'padding': '10px'
+            html.A(
+                html.Img(
+                    src='/assets/WHOI_OneLineLogo_WhiteType_RGB.png',
+                    style={'height': '30px'}
+                ),
+                href="https://www.whoi.edu/",
+                target="_blank"
+            )
+        ], style={
+            'flex': '1',
+            'display': 'flex',
+            'justifyContent': 'flex-start',
+            'alignItems': 'center'
         }),
-        dcc.Graph(id='profile-plot', style={
-            'width': '500px',
-            'height': '550px',
-            'padding': '10px'
+
+        # Right side: LTER Network Logo
+        html.Div([
+            html.A(
+                html.Img(
+                    src='/assets/lter-network.png',
+                    style={'height': '25px'}
+                ),
+                href="https://lternet.edu/",
+                target="_blank"
+            )
+        ], style={
+            'flex': '1',
+            'display': 'flex',
+            'justifyContent': 'flex-end',
+            'alignItems': 'center'
         })
     ], style={
         'display': 'flex',
-        'flexDirection': 'row',
-        'justifyContent': 'left',
-        'alignItems': 'left',
-        'gap': '20px'
+        'alignItems': 'center',
+        'backgroundColor': "#183554",
+        'padding': '5px 16px',
+        'borderTopLeftRadius': '5px',
+        'borderTopRightRadius': '5px',
+        'box-shadow': '0px 2px 5px rgba(0,0,0,0.15)',
+        'maxWidth': '99%',
+        'margin': 'auto',
+    }),
+
+
+    # ===== SUB HEADER =====
+    html.Div([
+        # Left side: Title
+        html.Div([
+            html.Span(
+                'STINGRAY DASHBOARD',
+                style={
+                    'color': "#183554",
+                    'fontSize': '32px',
+                    'fontWeight': 'bold'
+                }
+            )
+        ], style={
+            'flex': '1',
+            'display': 'flex',
+            'justifyContent': 'flex-start',
+            'alignItems': 'center'
+        }),
+
+        # Right side: NES-LTER logo
+        html.Div([
+            html.A(
+                html.Img(
+                    src='/assets/NES-LTER-horizontal.png',
+                    style={'height': '40px'}
+                ),
+                href="https://nes-lter.whoi.edu/",
+                target="_blank"
+            )
+        ], style={
+            'flex': '1',
+            'display': 'flex',
+            'justifyContent': 'flex-end',
+            'alignItems': 'center'
+        })
+    ], style={
+        'display': 'flex',
+        'alignItems': 'center',
+        'backgroundColor': 'white',
+        'padding': '8px 16px',
+        'borderBottomLeftRadius': '5px',
+        'borderBottomRightRadius': '5px',
+        'box-shadow': '0px 2px 5px rgba(0,0,0,0.1)',
+        'maxWidth': '99%',
+        'margin': 'auto',
+        'marginBottom': '10px'
+    }),
+
+    # ===== MAIN BODY =====
+    html.Div([
+
+        # --- LEFT CONTROLS ---
+        html.Div([
+            html.Div([  # Controls container
+
+                # Cruise Selector
+                html.Div([
+                    html.Label('Cruise:', style={'font-weight': 'bold', 'font-size': '15px'}),
+                    dcc.Dropdown(
+                        id='csv-selector',
+                        options=[{'label': f, 'value': f} for f in csv_files],
+                        value=csv_files[-1] if csv_files else None,
+                        clearable=False,
+                        style={'width': '100%', 'font-size': '15px'}
+                    )
+                ], style={'margin-bottom': '8px', 'margin-right': '10px'}),
+
+                # Refresh Button
+                html.Button(
+                    'Refresh',
+                    id='refresh-button',
+                    style={
+                        'margin': '6px 0 10px 0',
+                        'font-size': '15px',
+                        'padding': '6px',
+                        'background-color': '#007BFF',
+                        'color': 'white',
+                        'border': 'none',
+                        'border-radius': '5px',
+                        'cursor': 'pointer'
+                    }
+                ),
+                
+                # Checklists
+                dcc.Checklist(
+                    id='bathymetry',
+                    options=[{'label':'Bathymetry','value':'True'}],
+                    value=['True'],
+                    style={'font-size': '15px', 'margin-bottom': '6px', 'margin-right': '10px'}
+                ),
+                dcc.Checklist(
+                    id='station',
+                    options=[{'label':'Stations','value':'True'}],
+                    value=['True'],
+                    style={'font-size': '15px', 'margin-bottom': '8px', 'margin-right': '10px'}
+                ),
+
+                # Sub-sampling
+                html.Div([
+                    html.Label('Sub-sampling:', style={'font-size': '15px'}),
+                    dcc.Input(
+                        id='sub_sample',
+                        type='number',
+                        value=3,  # ✅ default = 3
+                        min=0,    # allow 0 = no subsampling
+                        step=1,
+                        style={'width': '100%', 'font-size': '15px'}
+                    )
+                ], style={'margin-bottom': '8px', 'margin-right': '10px'}),
+
+                # Axis / Depth / Coordinates
+                html.Div([html.Label('X-Axis:'), dcc.Dropdown(
+                    id='x_axis_variable',
+                    options=[{'label': lbl, 'value': val} for lbl, val in [
+                        ('Latitude','latitude'), ('Longitude','longitude'), ('Time','times')]],
+                    value='latitude',
+                    style={'width': '100%', 'font-size': '15px'}
+                )], style={'margin-bottom': '8px', 'margin-right': '10px'}),
+
+                html.Div([html.Label('Min Depth:'), dcc.Input(id='z_min', type='number', value=0,
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+                html.Div([html.Label('Max Depth:'), dcc.Input(id='z_max', type='number', value=200,
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+
+                html.Div([html.Label('Min Coordinate:'), dcc.Input(id='coord_min', type='number', value=None,
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+                html.Div([html.Label('Max Coordinate:'), dcc.Input(id='coord_max', type='number', value=None,
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '8px', 'margin-right': '10px'}),
+
+                # Color Variable
+                html.Div([html.Label('Color Variable:'), dcc.Dropdown(
+                    id='color_variable',
+                    options=[{'label': var.capitalize(), 'value': var} for var in sensor_vars],
+                    value='temperature',
+                    style={'width': '100%', 'font-size': '15px'}
+                )], style={'margin-bottom': '8px', 'margin-right': '10px'}),
+
+                # Colormap + Color Range
+                html.Div([html.Label('Colormap:'), dcc.Dropdown(
+                    id='color_map',
+                    options=[{'label': cmap, 'value': cmap} for cmap in colormaps],
+                    value='Jet',
+                    style={'width': '100%', 'font-size': '15px'}
+                )], style={'margin-bottom': '8px', 'margin-right': '10px'}),
+
+                html.Div([html.Label('Color Min:'), dcc.Input(id='v_min', type='number',
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+                html.Div([html.Label('Color Max:'), dcc.Input(id='v_max', type='number',
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+
+                # Filter Options
+                html.Div([html.Label('Filter Min:'), dcc.Input(id='filter_min', type='number',
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+                html.Div([html.Label('Filter Max:'), dcc.Input(id='filter-max', type='number',
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+                html.Div([html.Label('Filter Opacity:'), dcc.Input(id='hidden_opacity', type='number', value=0.05,
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '8px', 'margin-right': '10px'}),
+                
+                dcc.Store(id='user_range_change', data=False),
+
+            ], style={
+                'backgroundColor': '#F0F0F0',
+                'padding': '10px',
+                'border-radius': '5px',
+                'box-shadow': '0px 2px 5px rgba(0,0,0,0.1)'
+            })
+        ], style={'flex': '2', 'padding': '8px', 'minWidth': '200px', 'maxWidth': '240px'}),
+
+        # --- MIDDLE PLOTS ---
+        html.Div([
+            dcc.Graph(id='section-plot',
+                style={'width': '100%', 'height': '250px', 'marginBottom': '10px'}),
+            dcc.Store(id='filtered_selection_range'),
+
+            dcc.Graph(id='scatter-plot',
+                style={'width': '100%', 'height': '500px', 'marginBottom': '10px',
+                       'resize': 'both', 'overflow': 'auto'}),
+
+            # TS + Profile Plots
+            html.Div([
+                dcc.Graph(id='ts-plot',
+                    style={
+                        'width': '50%',   # ✅ responsive, takes half of container
+                        'height': '500px',
+                        'margin': '5px'
+                    }),
+                dcc.Graph(id='profile-plot',
+                    style={
+                        'width': '50%',   # ✅ responsive
+                        'height': '500px',
+                        'margin': '5px'
+                    })
+            ], style={
+                'display': 'flex',
+                'flexDirection': 'row',
+                'justifyContent': 'space-between',
+                'alignItems': 'stretch',
+                'width': '100%',
+                'height': 'auto'
+            })
+
+        ], style={'flex': '6', 'padding': '8px', 'minWidth': '520px'}),
+
+        # --- RIGHT OUTPUT ---
+        html.Div([
+            # Dummy spacer to match section-plot height
+            html.Div([
+                # Date / Time Inputs
+                html.Div([html.Label('Start Date:'), dcc.Input(id='start_date', type='text', placeholder='YYYY-MM-DD',
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+                html.Div([html.Label('Start Time:'), dcc.Input(id='start_time', type='text', placeholder='HH:MM:SS',
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+                html.Div([html.Label('End Date:'), dcc.Input(id='end_date', type='text', placeholder='YYYY-MM-DD',
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
+                html.Div([html.Label('End Time:'), dcc.Input(id='end_time', type='text', placeholder='HH:MM:SS',
+                        style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '8px', 'margin-right': '10px'}),
+            ],style={'height': '250px', 'marginBottom': '10px',
+                    'backgroundColor': '#F0F0F0',
+                    'padding': '10px',
+                    'border-radius': '5px',
+                    'box-shadow': '0px 2px 5px rgba(0,0,0,0.1)'
+                }),
+
+            # Actual click output
+            html.Div(id='click-output', style={
+                'padding': '6px',
+                'lineHeight': '1.2',
+                'overflowX': 'auto',
+                'textAlign': 'left',
+                'backgroundColor': 'white',
+                'height': '500px',
+                'box-shadow': '0px 2px 5px rgba(0,0,0,0.1)',
+                'border-radius': '5px'
+            }),
+
+            dcc.Store(id='available-sensor-vars')
+        ], style={'flex': '2', 'padding': '8px', 'minWidth': '200px'})
+
+    ], style={
+        'display': 'flex',
+        'flexDirection': 'row'
+    }),
+    
+    # ===== FOOTER (credits) =====
+    html.Div([
+
+        # Left side: Names
+        html.Span(
+            'Developed by: Anh Pham, Sidney Batchelder, Heidi Sosik',
+            style={
+                'color': 'white',
+                'fontSize': '14px',
+                'marginLeft': '8px'
+            }
+        ),
+
+        # Right side: Email
+        html.Span(
+            'anh.pham@whoi.edu',
+            style={
+                'color': 'white',
+                'fontSize': '14px',
+                'marginRight': '8px'
+            }
+        )
+
+    ], style={
+        'display': 'flex',
+        'justifyContent': 'space-between',   # names left, email right
+        'alignItems': 'center',
+        'backgroundColor': "#183554",
+        'padding': '6px 12px',
+        'border-radius': '5px',
+        'box-shadow': '0px -2px 5px rgba(0,0,0,0.1)',
+        'maxWidth': '99%',
+        'margin': '20px auto 0 auto'
     })
-])
+
+], style={
+    'padding': '5px',
+    'maxWidth': '99%',
+    'margin': 'auto',
+    'fontFamily': 'Arial'
+})
 
 # --- Callback to populate CSV selector and ensure valid default selection ---
 @app.callback(
@@ -468,14 +628,14 @@ def draw_section_plot(csv_file, sub_sample):
             showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
             showline=True, linecolor='black', mirror=True
         ),
-        paper_bgcolor='#F0F0F0',
+        paper_bgcolor='white',
         plot_bgcolor='white'
     )
     return fig
 
 # --- Callback: Store selection range from scatter-plot for TS plot filtering ---
 @app.callback(
-    Output('filtered-selection-range', 'data'),
+    Output('filtered_selection_range', 'data'),
     Input('scatter-plot', 'selectedData'),
     prevent_initial_call=True
 )
@@ -555,8 +715,6 @@ def track_range_change(coord_min, coord_max, ymin, ymax,
         Input('filter_min', 'value'),
         Input('filter-max', 'value'),
         Input('hidden_opacity', 'value'),
-        Input('fig_width', 'value'),
-        Input('fig_height', 'value'),
         Input('bathymetry', 'value'),
         Input('station', 'value'),
         Input('user_range_change', 'data')
@@ -566,7 +724,7 @@ def track_range_change(coord_min, coord_max, ymin, ymax,
 def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_time,
                 x_axis, color_var, color_map, vmin, vmax,
                 zmin, zmax, coord_min, coord_max, filter_min, filter_max,
-                hidden_opacity, fig_width, fig_height,
+                hidden_opacity,
                 bathymetry, station, user_changed_range):
 
     if not csv_file:
@@ -619,9 +777,10 @@ def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_tim
 
     # Optional overlays
     if 'True' in bathymetry and bathy is not None and x_axis == 'latitude':
+        bathy_mask = (bathy['latitude'] <= df['latitude'].max() + 0.1) & (bathy['latitude'] >= df['latitude'].min() - 0.1)
         fig.add_trace(go.Scatter(
-            x=bathy['latitude'],
-            y=bathy['bottom_depth_meters'],
+            x=bathy['latitude'][bathy_mask],
+            y=bathy['bottom_depth_meters'][bathy_mask],
             mode='lines',
             line=dict(color='black', width=1),
             name='Bathymetry',
@@ -643,12 +802,27 @@ def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_tim
         )
 
     # X-axis range logic (latitude has priority)
-    if (x_axis == 'latitude') and coord_min is not None and coord_max is not None:
-        x_range = [coord_max, coord_min]
-    elif (x_axis == 'longitude') and coord_min is not None and coord_max is not None:
-        x_range = [coord_min, coord_max]
+    if x_axis == 'latitude':
+        if coord_min is not None and coord_max is not None:
+            x_range = [coord_max, coord_min]
+        else:
+            x_range = [df['latitude'].max() + 0.1, df['latitude'].min() - 0.1]
+
+    elif x_axis == 'longitude':
+        if coord_min is not None and coord_max is not None:
+            x_range = [coord_min, coord_max]
+        else:
+            x_range = [df['longitude'].min() - 0.1, df['longitude'].max() + 0.1]
+
+    elif x_axis == 'times':
+        if coord_min is not None and coord_max is not None:
+            x_range = [coord_min, coord_max]   # assuming these are datetime
+        else:
+            x_range = [df['times'].min(), df['times'].max()]
+
     else:
-        x_range = [df['times'].min(), df['times'].max()] if x_axis == 'times' else None
+        x_range = None
+
 
     # Y-axis range logic (depth)
     if zmin is not None and zmax is not None:
@@ -662,8 +836,6 @@ def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_tim
         paper_bgcolor='white',
         plot_bgcolor='white',
         font=dict(color='black'),
-        width=fig_width or None,
-        height=fig_height or None,
         xaxis=dict(
             title=x_axis.capitalize(),
             range=x_range,
@@ -705,15 +877,12 @@ def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_tim
         Input('filter_min', 'value'),
         Input('filter-max', 'value'),
         Input('hidden_opacity', 'value'),
-        Input('fig_width', 'value'),
-        Input('fig_height', 'value'),
-        Input('filtered-selection-range', 'data')
+        Input('filtered_selection_range', 'data')
     ]
 )
 def update_ts_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_time,
                    color_var, color_map, vmin, vmax,
-                   filter_min, filter_max, hidden_opacity,
-                   fig_width, fig_height, select_range):
+                   filter_min, filter_max, hidden_opacity, select_range):
     
     if not csv_file:
         return px.scatter()
@@ -796,8 +965,6 @@ def update_ts_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_
         paper_bgcolor='white',
         plot_bgcolor='white',
         font=dict(color='black'),
-        width=fig_width or None,
-        height=fig_width or None,  # ensure square shape
         yaxis=dict(
             title='Temperature (°C)',
             range=[tmin, tmax],
@@ -840,15 +1007,12 @@ def update_ts_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_
         Input('filter_min', 'value'),
         Input('filter-max', 'value'),
         Input('hidden_opacity', 'value'),
-        Input('fig_width', 'value'),
-        Input('fig_height', 'value'),
-        Input('filtered-selection-range', 'data')
+        Input('filtered_selection_range', 'data')
     ]
 )
 def update_profile_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_time,
                         color_var, color_map, vmin, vmax, zmin, zmax,
-                        filter_min, filter_max, hidden_opacity,
-                        fig_width, fig_height, select_range):
+                        filter_min, filter_max, hidden_opacity, select_range):
 
     if not csv_file:
         return px.scatter()
@@ -925,8 +1089,6 @@ def update_profile_plot(csv_file, sub_sample, start_date, start_time, end_date, 
         paper_bgcolor='white',
         plot_bgcolor='white',
         font=dict(color='black'),
-        width=fig_width or None,
-        height=fig_width or None,  # ensure square shape
     )
     
     # Reverse y-axis if depth increases downward
