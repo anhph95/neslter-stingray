@@ -104,16 +104,29 @@ work_dir = Path('/dash_data') if Path('/dash_data').is_dir() else Path('dash_dat
 data_dir, misc_dir = work_dir / 'data', work_dir / 'misc'
 
 def load_data(file_name, sub_sample=True):
-    '''Load CSV file into a DataFrame and preprocess it.'''
+    """Load CSV file into a DataFrame, preprocess it, and filter invalid coordinates."""
     df = pd.read_csv(f'{data_dir}/{file_name}.csv', low_memory=False)
+    
+    # Ensure 'times' column is datetime
     if not pd.api.types.is_datetime64_any_dtype(df['times']):
         df['times'] = pd.to_datetime(df['times'], errors='coerce', cache=True)
+    
+    # Ensure certain columns exist
     for col in ['media', 'frame', 'media_path', 'link']:
         df[col] = df.get(col, np.nan)
+    
+    # Filter out invalid latitude/longitude
+    if 'longitude' in df.columns and 'latitude' in df.columns:
+        df = df[
+            (df['longitude'].between(-180, 180, inclusive="both")) &
+            (df['latitude'].between(-180, 180, inclusive="both"))
+        ]
+    
+    # Sub-sample if requested
     if sub_sample:
         return df[::3].reset_index(drop=True)
     else:
-        return df
+        return df.reset_index(drop=True)
 
 # Initial dataset
 csv_files = get_csv_files()
