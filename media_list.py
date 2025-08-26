@@ -16,6 +16,7 @@ def cli():
     parser.add_argument('--project-id', type=int, help='Project ID', default=1)
     parser.add_argument('--token', type=str, help='Tator login token, string or token file')
     parser.add_argument('--media-dir', type=str, help='Path to the media data')
+    parser.add_argument('--fps', type=int, help='Frame per second, default is 15', default=15)
     args = parser.parse_args()
     return args
 
@@ -52,6 +53,7 @@ def main():
     PROJ_ID = args.project_id
     TOKEN = args.token
     media_dir = args.media_dir
+    fps = args.fps
     if pathlib.Path(TOKEN).is_file():
         with open(TOKEN, 'r') as f:
             TOKEN = f.read().strip()
@@ -108,7 +110,7 @@ def main():
 
     for _, group in df.groupby("media",sort=False):
         base_timestamp = group["media_time"].iloc[0]
-        adjusted = group["frame"].apply(lambda frame: base_timestamp + timedelta(seconds=frame/ 15))
+        adjusted = group["frame"].apply(lambda frame: base_timestamp + timedelta(seconds=frame/fps))
         adjusted_timestamps.extend(adjusted)
 
     # Add the calculated timestamps back to the DataFrame
