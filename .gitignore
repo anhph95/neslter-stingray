@@ -1,5 +1,6 @@
 # .gitignore for VM deployment
 *
+!.gitignore
 !dashapp.py
 !assets/
 !assets/**
