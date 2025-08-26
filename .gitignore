@@ -1,6 +1,11 @@
-# .gitignore for VM deployment
-*
+# Ignore everything
+/*
+
+# Keep .gitignore itself
 !.gitignore
-!dashapp.py
-!assets/
-!assets/**
+
+# Keep dashapp.py
+!/dashapp.py
+
+# Keep assets folder and everything inside
+!/assets/
