@@ -1,48 +1,5 @@
-# Python cache / compiled files
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pkl
-
-# Virtual environments
-.venv/
-env/
-venv/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# VSCode / PyCharm / IDE stuff
-.vscode/
-.idea/
-
-# Logs
-*.log
-
-# Dash auto-generated cache
-.cache/
-dash_uploads/
-
-# OS stuff
-.DS_Store
-Thumbs.db
-
-# Docker
-*.pid
-*.sock
-.env
-docker-compose.override.yml
-
-# Ignore files
-*.csv
-*.CAL
-*.ipynb
-*.html
-*.png
-
-# Keep misc file
-!dash_data/misc/
-!dash_data/misc/**
+# .gitignore for VM deployment
+*
+!dashapp.py
 !assets/
 !assets/**
