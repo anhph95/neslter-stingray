@@ -280,7 +280,7 @@ app.layout = html.Div([
                 html.Div([
                     html.Label('Cruise:', style={'font-weight': 'bold', 'font-size': '15px'}),
                     dcc.Dropdown(
-                        id='csv_selector',
+                        id='csv-selector',
                         options=[{'label': f, 'value': f} for f in csv_files],
                         value=csv_files[-1] if csv_files else None,
                         clearable=False,
@@ -303,9 +303,6 @@ app.layout = html.Div([
                         'cursor': 'pointer'
                     }
                 ),
-                
-                # Shared data
-                dcc.Store(id='shared-data'),
                 
                 # Checklists
                 dcc.Checklist(
@@ -334,7 +331,7 @@ app.layout = html.Div([
                     )
                 ], style={'margin-bottom': '8px', 'margin-right': '10px'}),
 
-                # Axis
+                # Axis / Depth / Coordinates
                 html.Div([html.Label('X-Axis:'), dcc.Dropdown(
                     id='x_axis_variable',
                     options=[{'label': lbl, 'value': val} for lbl, val in [
@@ -358,8 +355,7 @@ app.layout = html.Div([
                     value='Jet',
                     style={'width': '100%', 'font-size': '15px'}
                 )], style={'margin-bottom': '8px', 'margin-right': '10px'}),
-
-                # Plot options
+                
                 html.Div([html.Label('Min Depth:'), dcc.Input(id='z_min', type='number', value=0,
                         style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
                 html.Div([html.Label('Max Depth:'), dcc.Input(id='z_max', type='number', value=200,
@@ -369,8 +365,8 @@ app.layout = html.Div([
                         style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
                 html.Div([html.Label('Max Coordinate:'), dcc.Input(id='coord_max', type='number', value=None,
                         style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '8px', 'margin-right': '10px'}),
-
-                # Color option
+                
+                # Color Variable
                 html.Div([html.Label('Color Min:'), dcc.Input(id='v_min', type='number',
                         style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
                 html.Div([html.Label('Color Max:'), dcc.Input(id='v_max', type='number',
@@ -379,7 +375,7 @@ app.layout = html.Div([
                 # Filter Options
                 html.Div([html.Label('Filter Min:'), dcc.Input(id='filter_min', type='number',
                         style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
-                html.Div([html.Label('Filter Max:'), dcc.Input(id='filter_max', type='number',
+                html.Div([html.Label('Filter Max:'), dcc.Input(id='filter-max', type='number',
                         style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '6px', 'margin-right': '10px'}),
                 html.Div([html.Label('Filter Opacity:'), dcc.Input(id='hidden_opacity', type='number', value=0.05,
                         style={'width': '100%', 'font-size': '15px'})], style={'margin-bottom': '8px', 'margin-right': '10px'}),
@@ -515,8 +511,8 @@ app.layout = html.Div([
 
 # --- Callback to populate CSV selector and ensure valid default selection ---
 @app.callback(
-    Output("csv_selector", "options"),
-    Output("csv_selector", "value"),
+    Output("csv-selector", "options"),
+    Output("csv-selector", "value"),
     Input("refresh-button", "n_clicks"),
     prevent_initial_call=True
 )
@@ -539,7 +535,7 @@ def update_file_list(n_clicks):
         Output('end_time', 'value')
     ],
     [
-        Input('csv_selector', 'value'),
+        Input('csv-selector', 'value'),
         Input('section-plot', 'selectedData')
     ],
     [
@@ -552,7 +548,7 @@ def update_file_list(n_clicks):
 def update_time_range(csv_file, selected_data, start_date, end_date, start_time, end_time):
     triggered = ctx.triggered_id
 
-    if triggered == 'csv_selector':
+    if triggered == 'csv-selector':
         if not csv_file:
             return None, None, None, None
 
@@ -591,8 +587,12 @@ def update_time_range(csv_file, selected_data, start_date, end_date, start_time,
         Output('color_variable', 'options'),
         Output('color_variable', 'value')
     ],
-    [Input('csv_selector', 'value')],
-    [State('color_variable', 'value')],
+    [
+        Input('csv-selector', 'value')
+    ],
+    [
+        State('color_variable', 'value')
+    ],
     prevent_initial_call=True
 )
 def update_color_variable_options(csv_file, current_color):
@@ -623,7 +623,7 @@ def reset_vmin_vmax(color_var):
 # --- Callback: Section plot for time-latitude selection ---
 @app.callback(
     Output('section-plot', 'figure'),
-    Input('csv_selector', 'value'),
+    Input('csv-selector', 'value'),
     Input('sub_sample', 'value')
 )
 
@@ -710,7 +710,7 @@ def track_range_change(coord_min, coord_max, ymin, ymax,
 # @app.callback(
 #     Output('download_dataframe_csv', 'data'),
 #     Input('download-button', 'n_clicks'),
-#     State('csv_selector', 'value'),
+#     State('csv-selector', 'value'),
 #     prevent_initial_call=True
 # )
 # def download_csv(n_clicks, csv_file):
@@ -720,115 +720,82 @@ def track_range_change(coord_min, coord_max, ymin, ymax,
 #         return dcc.send_data_frame(df.to_csv, filename=f'{csv_file}.csv', index=False)
 #     return no_update
 
-# Preprocess data
-@app.callback(
-    Output("shared-data", "data"),
-    [
-        Input("csv_selector", "value"),
-        Input("sub_sample", "value"),
-        Input("start_date", "value"),
-        Input("start_time", "value"),
-        Input("end_date", "value"),
-        Input("end_time", "value"),
-        Input("color_variable", "value"),
-        Input("filter_min", "value"),
-        Input("filter_max", "value"),
-    ]
-)
-def update_shared_data(csv_file, sub_sample,
-                       start_date, start_time, end_date, end_time,
-                       color_var, filter_min, filter_max):
-
-    if not csv_file:
-        return {}
-
-    df = load_data(csv_file, sub_sample=sub_sample)
-
-    # Value filter
-    if filter_min is not None and filter_max is not None:
-        df = df[df[color_var].between(filter_min, filter_max) & df[color_var].notna()]
-    else:
-        df = df[df[color_var].notna()]
-
-    if df.empty:
-        return {}
-
-    # Date filter
-    start_dt = pd.to_datetime(f"{start_date} {start_time}" if start_time else start_date, errors="coerce")
-    end_dt   = pd.to_datetime(f"{end_date} {end_time}" if end_time else end_date, errors="coerce")
-    if pd.notnull(start_dt) and pd.notnull(end_dt):
-        df = df[df["times"].between(start_dt, end_dt)]
-
-    return {"df": df.to_dict("records")}
-
 @app.callback(
     [
-        Output("scatter-plot", "figure"),
-        Output("available-sensor-vars", "data")
+        Output('scatter-plot', 'figure'),
+        Output('available-sensor-vars', 'data')
     ],
     [
-        Input("shared-data", "data"),
-        Input("x_axis_variable", "value"),
-        Input("color_variable", "value"),
-        Input("color_map", "value"),
-        Input("v_min", "value"),
-        Input("v_max", "value"),
-        Input("z_min", "value"),
-        Input("z_max", "value"),
-        Input("coord_min", "value"),
-        Input("coord_max", "value"),
-        Input("hidden_opacity", "value"),
-        Input("bathymetry", "value"),
-        Input("station", "value"),
-        Input("user_range_change", "data")
+        Input('csv-selector', 'value'),
+        Input('sub_sample', 'value'),
+        Input('start_date', 'value'),
+        Input('start_time', 'value'),
+        Input('end_date', 'value'),
+        Input('end_time', 'value'),
+        Input('x_axis_variable', 'value'),
+        Input('color_variable', 'value'),
+        Input('color_map', 'value'),
+        Input('v_min', 'value'),
+        Input('v_max', 'value'),
+        Input('z_min', 'value'),
+        Input('z_max', 'value'),
+        Input('coord_min', 'value'),
+        Input('coord_max', 'value'),
+        Input('filter_min', 'value'),
+        Input('filter-max', 'value'),
+        Input('hidden_opacity', 'value'),
+        Input('bathymetry', 'value'),
+        Input('station', 'value'),
+        Input('user_range_change', 'data')
     ]
 )
 
-def update_scatter(shared, x_axis, color_var, color_map,
-                   vmin, vmax, zmin, zmax,
-                   coord_min, coord_max,
-                   hidden_opacity, bathymetry, station, user_changed_range):
+def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_time,
+                x_axis, color_var, color_map, vmin, vmax,
+                zmin, zmax, coord_min, coord_max, filter_min, filter_max,
+                hidden_opacity,
+                bathymetry, station, user_changed_range):
 
-    if not shared or "df" not in shared:
-        return go.Figure().add_annotation(text="⚠️ No data", showarrow=False), []
+    if not csv_file:
+        return go.Figure().add_annotation(text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False), []
 
-    df = pd.DataFrame(shared["df"])
-    df['times'] = pd.to_datetime(df['times'], errors='coerce', cache=True)
-    sensor_vars = [c for c in df.columns if '_std' not in c and c not in meta_vars]
+    # Load and filter data
+    df = load_data(csv_file, sub_sample=sub_sample)
+    sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
+    
+    # Check x_axis variable
+    if x_axis not in df.columns:
+        x_axis = 'latitude'
 
-    # dynamic vmin/vmax
+    # Filter by color variable
+    if filter_min is not None and filter_max is not None:
+        df = df[(df[color_var].between(filter_min, filter_max)) & (df[color_var].notna())].reset_index(drop=True)
+    else:
+        df = df[df[color_var].notna()].reset_index(drop=True)
+
+    if df.empty:
+        return go.Figure().add_annotation(
+            text=f"⚠️ No {color_var} data available", 
+            x=0.5, y=0.5, xref="paper", yref="paper", 
+            showarrow=False, font=dict(size=16, color="red")
+        ), []
+
+    # Determine color range
     if vmin is None or vmax is None:
         q = df[color_var].quantile([0.05, 0.95])
         vmin = q[0.05] if vmin is None else vmin
         vmax = q[0.95] if vmax is None else vmax
 
-    # scatter
-    fig = px.scatter(
-        df, x=x_axis, y="depth", color=color_var,
-        color_continuous_scale=color_map,
-        range_color=[vmin, vmax],
-        hover_data={'depth': ':.2f', 'latitude': ':.2f', 'longitude': ':.2f', color_var: ':.2f'},
-        custom_data=['media', 'frame', 'times', 'latitude', 'longitude', 'link'] + sensor_vars
-    )
-    fig.update_traces(
-        selected=dict(marker=dict(opacity=1)),
-        unselected=dict(marker=dict(opacity=hidden_opacity))
-    )
-
-    # axis ranges
-    if zmin is not None and zmax is not None:
-        y_range = [zmax, zmin - 10]
-    else:
-        y_range = [df["depth"].max(), df["depth"].min()]
-        
-    if x_axis == "latitude":
-        x_range = [coord_max, coord_min] if coord_min and coord_max else [df["latitude"].max(), df["latitude"].min()]
-    elif x_axis == "longitude":
-        x_range = [coord_min, coord_max] if coord_min and coord_max else [df["longitude"].min(), df["longitude"].max()]
-    elif x_axis == "times":
-        x_range = [df["times"].min(), df["times"].max()]
-    else:
-        x_range = None
+    # Filter by time range
+    # if time_range and 'x0' in time_range and 'x1' in time_range:
+    #     x0, x1 = sorted([pd.to_datetime(time_range['x0']), pd.to_datetime(time_range['x1'])])
+    #     df = df[df['times'].between(x0, x1)]
+    
+    # Date time filtering
+    start_dt = pd.to_datetime(f"{start_date} {start_time}" if start_time else start_date, errors='coerce')
+    end_dt = pd.to_datetime(f"{end_date} {end_time}" if end_time else end_date, errors='coerce')
+    if pd.notnull(start_dt) and pd.notnull(end_dt):
+        df = df[(df['times'] >= start_dt) & (df['times'] <= end_dt)] 
         
     # Create scatter plot
     fig = px.scatter(
@@ -895,6 +862,7 @@ def update_scatter(shared, x_axis, color_var, color_map,
     else:
         x_range = None
 
+
     # Y-axis range logic (depth)
     if zmin is not None and zmax is not None:
         y_range = [zmax, zmin - 10]  # reversed axis for depth
@@ -929,34 +897,39 @@ def update_scatter(shared, x_axis, color_var, color_map,
             )
         )
     )
+
     return fig, sensor_vars
 
 @app.callback(
-    Output("ts-plot", "figure"),
+    Output('ts-plot', 'figure'),
     [
-        Input("shared-data", "data"),
-        Input("color_variable", "value"),
-        Input("color_map", "value"),
-        Input("v_min", "value"),
-        Input("v_max", "value"),
-        Input("hidden_opacity", "value"),
-        Input("filtered_selection_range", "data")
+        Input('csv-selector', 'value'),
+        Input('sub_sample', 'value'),
+        Input('start_date', 'value'),
+        Input('start_time', 'value'),
+        Input('end_date', 'value'),
+        Input('end_time', 'value'),
+        Input('color_variable', 'value'),
+        Input('color_map', 'value'),
+        Input('v_min', 'value'),
+        Input('v_max', 'value'),
+        Input('filter_min', 'value'),
+        Input('filter-max', 'value'),
+        Input('hidden_opacity', 'value'),
+        Input('filtered_selection_range', 'data')
     ]
 )
-def update_ts(shared, color_var, color_map, vmin, vmax, hidden_opacity, select_range):
+def update_ts_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_time,
+                   color_var, color_map, vmin, vmax,
+                   filter_min, filter_max, hidden_opacity, select_range):
+    
+    if not csv_file:
+        return px.scatter()
 
-    if not shared or "df" not in shared:
-        return go.Figure().add_annotation(text="⚠️ No data", showarrow=False)
+    df = load_data(csv_file, sub_sample=sub_sample)
+    df = df.dropna(subset=['temperature', 'salinity'])
 
-    df = pd.DataFrame(shared["df"])
-    df = df.dropna(subset=['temperature', 'salinity', color_var]).reset_index(drop=True)
-    sensor_vars = [c for c in df.columns if '_std' not in c and c not in meta_vars]
-
-    # dynamic vmin/vmax
-    if vmin is None or vmax is None:
-        q = df[color_var].quantile([0.05, 0.95])
-        vmin = q[0.05] if vmin is None else vmin
-        vmax = q[0.95] if vmax is None else vmax
+    sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
 
     # Grid for density contours
     tmin, tmax = df['temperature'].quantile([0.01, 0.99]).round().astype(int)
@@ -966,9 +939,26 @@ def update_ts(shared, color_var, color_map, vmin, vmax, hidden_opacity, select_r
     smin -= 2
     smax += 2
 
-    # TS grid
     T, S = np.meshgrid(np.arange(tmin, tmax, 0.5), np.arange(smin, smax, 0.5), indexing='ij')
     D = ies80(S, T, 0) - 1000
+
+    # Apply value filter
+    if filter_min is not None and filter_max is not None:
+        df = df[(df[color_var].between(filter_min, filter_max)) & (df[color_var].notna())].reset_index(drop=True)
+    else:
+        df = df[df[color_var].notna()].reset_index(drop=True)
+
+    # Set color range dynamically if not provided
+    if vmin is None or vmax is None:
+        q = df[color_var].quantile([0.05, 0.95])
+        vmin = q[0.05] if vmin is None else vmin
+        vmax = q[0.95] if vmax is None else vmax
+
+    # Date time filtering
+    start_dt = pd.to_datetime(f"{start_date} {start_time}" if start_time else start_date, errors='coerce')
+    end_dt = pd.to_datetime(f"{end_date} {end_time}" if end_time else end_date, errors='coerce')
+    if pd.notnull(start_dt) and pd.notnull(end_dt):
+        df = df[(df['times'] >= start_dt) & (df['times'] <= end_dt)] 
 
     # Prepare opacity masking based on zoom selection
     opacity_values = np.ones(len(df))
@@ -1050,29 +1040,52 @@ def update_ts(shared, color_var, color_map, vmin, vmax, hidden_opacity, select_r
     return fig
 
 @app.callback(
-    Output("profile-plot", "figure"),
+    Output('profile-plot', 'figure'),
     [
-        Input("shared-data", "data"),
-        Input("color_variable", "value"),
-        Input("v_min", "value"),
-        Input("v_max", "value"),
-        Input("z_min", "value"),
-        Input("z_max", "value"),
-        Input("filtered_selection_range", "data")
+        Input('csv-selector', 'value'),
+        Input('sub_sample', 'value'),
+        Input('start_date', 'value'),
+        Input('start_time', 'value'),
+        Input('end_date', 'value'),
+        Input('end_time', 'value'),
+        Input('color_variable', 'value'),
+        Input('color_map', 'value'),
+        Input('v_min', 'value'),
+        Input('v_max', 'value'),
+        Input('z_min', 'value'),
+        Input('z_max', 'value'),
+        Input('filter_min', 'value'),
+        Input('filter-max', 'value'),
+        Input('hidden_opacity', 'value'),
+        Input('filtered_selection_range', 'data')
     ]
 )
-def update_profile(shared, color_var,vmin, vmax,
-                   zmin, zmax, select_range):
+def update_profile_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_time,
+                        color_var, color_map, vmin, vmax, zmin, zmax,
+                        filter_min, filter_max, hidden_opacity, select_range):
 
-    if not shared or "df" not in shared:
-        return go.Figure().add_annotation(text="⚠️ No data", showarrow=False)
+    if not csv_file:
+        return px.scatter()
 
-    df = pd.DataFrame(shared["df"])
+    df = load_data(csv_file, sub_sample=sub_sample)
 
+    # Apply value filter
+    if filter_min is not None and filter_max is not None:
+        df = df[(df[color_var].between(filter_min, filter_max)) & (df[color_var].notna())].reset_index(drop=True)
+    else:
+        df = df[df[color_var].notna()].reset_index(drop=True)
+
+    # Set color range dynamically if not provided
     if vmin is None or vmax is None:
         q = df[color_var].quantile([0.05, 0.95])
         vmin = q[0.05] if vmin is None else vmin
         vmax = q[0.95] if vmax is None else vmax
+
+    # Date time filtering
+    start_dt = pd.to_datetime(f"{start_date} {start_time}" if start_time else start_date, errors='coerce')
+    end_dt = pd.to_datetime(f"{end_date} {end_time}" if end_time else end_date, errors='coerce')
+    if pd.notnull(start_dt) and pd.notnull(end_dt):
+        df = df[(df['times'] >= start_dt) & (df['times'] <= end_dt)] 
 
     if select_range and all(k in select_range for k in ['x0', 'x1', 'y0', 'y1']):
         lat0, lat1 = sorted([select_range['x0'], select_range['x1']])
@@ -1080,27 +1093,15 @@ def update_profile(shared, color_var,vmin, vmax,
         mask = df['latitude'].between(lat0, lat1) & df['depth'].between(d0, d1)
         df = df[mask].reset_index(drop=True)
     
-    # # Bin depth
-    # step = 1
-    # df['depth'] = np.floor((df['depth'] + step / 2) / step) * step
+    # Bin depth
+    step = 1
+    df['depth'] = np.floor((df['depth'] + step / 2) / step) * step
 
-    # Compute summary stats
-    main_summary = (
-        df.groupby('depth')[color_var]
-        .agg([
-            ('median', 'median'),
-            ('q25', lambda x: x.quantile(0.25) if len(x) > 2 else np.nan),
-            ('q75', lambda x: x.quantile(0.75) if len(x) > 2 else np.nan),
-        ])
-        .dropna()
-        .reset_index()
-    )
-
-    # Ensure quantiles are ordered properly
-    main_summary['q25'], main_summary['q75'] = (
-        main_summary[['q25', 'q75']].min(axis=1),
-        main_summary[['q25', 'q75']].max(axis=1),
-    )
+    main_summary = df.groupby('depth')[color_var].agg(
+        median=lambda x: x.median(),
+        q25=lambda x: x.quantile(0.25),
+        q75=lambda x: x.quantile(0.75)
+    ).reset_index()
     
     fig = go.Figure()
 
