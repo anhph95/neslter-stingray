@@ -54,11 +54,11 @@ def main():
     TOKEN = args.token
     media_dir = args.media_dir
     fps = args.fps
+    
     if pathlib.Path(TOKEN).is_file():
         with open(TOKEN, 'r') as f:
             TOKEN = f.read().strip()
-    api = tator.get_api(host=HOST, token=TOKEN)
-    
+                
     if media_dir is None:
         media_dir = f'/mnt/vast/nes-lter/Stingray/data/NESLTER_{CRUISE}/Basler_avA2300-25gm'
 
@@ -83,7 +83,6 @@ def main():
     df['media_time'] = df['media'].apply(
         lambda x: datetime.strptime(x.split('-')[-1].rstrip('Z'), "%Y%m%dT%H%M%S.%f")
     )
-
 
     # Find default media size
     standard_size = df['media_size'].mode()[0]
@@ -119,7 +118,9 @@ def main():
     # Get list of video from df
     query = df['media'].dropna().astype(str)
     query = query.unique()
+    
     # Get list of video from Tator
+    api = tator.get_api(host=HOST, token=TOKEN)
     project_objs = api.get_media_list(PROJ_ID, dtype='video')
     project_objs = sorted(project_objs, key = lambda p: p.id)
     # Get media ID
