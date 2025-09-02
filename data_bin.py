@@ -17,6 +17,7 @@ def cli():
     parser.add_argument('--cruise', type=str, required=True, help='Cruise ID, required, e.g. EN706')
     parser.add_argument('--sensor_dir', type=str, default='raw_data', help='Path to the sensor data, default is raw_data')
     parser.add_argument('--media_dir', type=str, default='medialist', help='Path to the media data, default is medialist')
+    parser.add_argument('--out_dir', type=str, default='dash_data/data', help='Path to the output directory, default is dash_data/data')
     parser.add_argument('--bin_cols', type=str, nargs='+', default=['matdate', 'depth'],
                         help='Columns to bin (space-separated list, e.g., \"matdate depth\")')
     parser.add_argument('--bin_steps', type=float, nargs='+', default=[30/86400, 1],
@@ -25,10 +26,10 @@ def cli():
 
 def main():
     args = cli()
-    cruise, sensor_dir, media_dir = args.cruise, args.sensor_dir, args.media_dir
+    cruise, sensor_dir, media_dir, out_dir = args.cruise, args.sensor_dir, args.media_dir, args.out_dir
     cols, steps = args.bin_cols, args.bin_steps
 
-    pathlib.Path('dash_data/data').mkdir(parents=True, exist_ok=True)
+    pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     # Find matching sensor file
     try:
@@ -93,7 +94,7 @@ def main():
     df_mean = df_mean.rename(columns=rename_map)
     
     date_string = df_mean['times'][0].strftime('%Y%m%d')
-    output_file = f'dash_data/data/{date_string}_{cruise}.csv'
+    output_file = f'{out_dir}/{date_string}_{cruise}.csv'
     df_mean.to_csv(output_file, encoding='utf-8', index=False)
     logging.info(f"Processed {date_string}_{cruise}. Data saved as {output_file}")
 
