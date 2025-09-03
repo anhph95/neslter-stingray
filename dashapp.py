@@ -129,7 +129,7 @@ def load_data(file_name, sub_sample=1):
             df['times'] = pd.to_datetime(df['times'], errors='coerce', cache=True)
 
         # Add missing columns
-        for col in ['media', 'frame', 'media_path', 'link']:
+        for col in ['media', 'frame', 'media_path', 'id', 'link', 'media_2', 'frame_2', 'media_path_2', 'id_2', 'link_2']:
             if col not in df.columns:
                 df[col] = np.nan
 
@@ -157,7 +157,7 @@ else:
     df = pd.DataFrame()
 
 # Define variables for dropdowns
-meta_vars = ['timestamp', 'times', 'matdate', 'latitude', 'longitude', 'depth', 'media', 'media_path', 'frame', 'id', 'link']
+meta_vars = ['timestamp', 'times', 'matdate', 'latitude', 'longitude', 'depth', 'media', 'media_path', 'frame', 'id', 'link', 'media_2', 'media_path_2', 'frame_2', 'id_2', 'link_2']
 sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars] if not df.empty else []
 colormaps = [name for name in px.colors.sequential.__dict__ if not name.startswith('_')]
 
@@ -949,8 +949,6 @@ def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_tim
     end_dt = pd.to_datetime(f"{end_date} {end_time}" if end_time else end_date, errors='coerce')
     if pd.notnull(start_dt) and pd.notnull(end_dt):
         df = df[(df['times'] >= start_dt) & (df['times'] <= end_dt)].reset_index(drop=True)
-    
-    df['point_id'] = df.index
         
     # # Color
     # if filter_min is not None and filter_max is not None:
@@ -964,6 +962,8 @@ def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_tim
             x=0.5, y=0.5, xref="paper", yref="paper", 
             showarrow=False, font=dict(size=16, color="red")
         ), []
+    
+    df['point_id'] = df.index
     
     # --- Plotting ---
     # Determine color range
@@ -981,7 +981,7 @@ def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_tim
         color_continuous_scale=color_map,
         range_color=[vmin, vmax],
         hover_data={'depth': ':.2f', 'latitude': ':.2f', 'longitude': ':.2f', color_var: ':.2f'},
-        custom_data=['point_id', 'media', 'frame', 'times', 'latitude', 'longitude', 'link'] + sensor_vars
+        custom_data=['point_id', 'media', 'frame', 'media_2', 'frame_2', 'times', 'latitude', 'longitude', 'link', 'link_2'] + sensor_vars
     )
     
     fig.update_traces(
@@ -1138,7 +1138,7 @@ def update_ts_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_
     if pd.notnull(start_dt) and pd.notnull(end_dt):
         df = df[(df['times'] >= start_dt) & (df['times'] <= end_dt)].reset_index(drop=True)
 
-    df['point_id'] = df.index
+
 
     # # Color
     # if filter_min is not None and filter_max is not None:
@@ -1153,6 +1153,8 @@ def update_ts_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_
             x=0.5, y=0.5, xref="paper", yref="paper", 
             showarrow=False, font=dict(size=16, color="red")
         )
+    
+    df['point_id'] = df.index
     
     # --- TS Contour ---
     # Grid for density contours
@@ -1182,9 +1184,9 @@ def update_ts_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_
         color_continuous_scale=color_map,
         range_color=[vmin, vmax],
         hover_data={
-            'depth': ':.2f', 'latitude': ':.2f', 'longitude': ':.2f', color_var: ':.2f'
+            'temperature': ':.2f', 'salinity': ':.2f', 'depth': ':.2f', 'latitude': ':.2f', 'longitude': ':.2f', color_var: ':.2f'
         },
-        custom_data=['point_id', 'media', 'frame', 'times', 'latitude', 'longitude', 'link'] + sensor_vars
+        custom_data=['point_id', 'media', 'frame', 'media_2', 'frame_2', 'times', 'latitude', 'longitude', 'link', 'link_2'] + sensor_vars
     )
     
     fig.update_traces(
@@ -1304,9 +1306,9 @@ def update_profile_plot(csv_file, sub_sample, start_date, start_time, end_date, 
         df = df[df["point_id"].isin(selected_data["selected_ids"])].reset_index(drop=True)
         
     # --- Depth binning ---
-    # # Bin depth
-    # step = 1
-    # df['depth'] = np.floor((df['depth'] + step / 2) / step) * step
+    # Bin depth
+    step = 1
+    df['depth'] = np.floor((df['depth'] + step / 2) / step) * step
     
     main_summary = df.groupby('depth')[color_var].agg(
         median=lambda x: x.median(),
@@ -1330,7 +1332,13 @@ def update_profile_plot(csv_file, sub_sample, start_date, start_time, end_date, 
             mode='lines+markers',  # dots + line = "O-dot"
             line=dict(color='blue'),
             marker=dict(symbol='circle', size=6, color='blue'),
-            showlegend=False
+            showlegend=False,
+            hoverinfo='text',
+            hovertemplate = (
+                "<b>Depth:</b> %{y:.2f} m<br>" +
+                "<b>" + color_var.capitalize() + ":</b> %{x:.2f} " + sled_units.get(color_var, "") + "<br>" +
+                "<extra></extra>"
+            )
         )
     )
     
@@ -1396,12 +1404,15 @@ def display_click_data(clickData, sensor_vars):
     try:
         point = clickData['points'][0]
         custom_data = point.get('customdata', [])
-        media = custom_data[1] if len(custom_data) > 1 and pd.notna(custom_data[1]) else 'N/A'
-        frame = custom_data[2] if len(custom_data) > 2 and pd.notna(custom_data[2]) else 'N/A'
-        raw_time = custom_data[3] if len(custom_data) > 3 and pd.notna(custom_data[3]) else None
-        latitude = custom_data[4] if len(custom_data) > 4 and pd.notna(custom_data[4]) else None
-        longitude = custom_data[5] if len(custom_data) > 5 and pd.notna(custom_data[5]) else None
-        media_link = custom_data[6] if len(custom_data) > 6 and pd.notna(custom_data[6]) else None
+        media       = custom_data[1] if len(custom_data) > 1 and pd.notna(custom_data[1]) else 'N/A'
+        frame       = custom_data[2] if len(custom_data) > 2 and pd.notna(custom_data[2]) else 'N/A'
+        media_2     = custom_data[3] if len(custom_data) > 3 and pd.notna(custom_data[3]) else 'N/A'
+        frame_2     = custom_data[4] if len(custom_data) > 4 and pd.notna(custom_data[4]) else 'N/A'
+        raw_time    = custom_data[5] if len(custom_data) > 5 and pd.notna(custom_data[5]) else None
+        latitude    = custom_data[6] if len(custom_data) > 6 and pd.notna(custom_data[6]) else None
+        longitude   = custom_data[7] if len(custom_data) > 7 and pd.notna(custom_data[7]) else None
+        media_link  = custom_data[8] if len(custom_data) > 8 and pd.notna(custom_data[8]) else None
+        media_link_2= custom_data[9] if len(custom_data) > 9 and pd.notna(custom_data[9]) else None
         depth = point.get('y', 'N/A')
 
         # Format time safely
@@ -1409,7 +1420,7 @@ def display_click_data(clickData, sensor_vars):
 
         # Prepare variable details dynamically
         variable_details = []
-        for i, var in enumerate(sensor_vars or [], start=7):  # Start at index 7 since first vars are fixed
+        for i, var in enumerate(sensor_vars or [], start=10):  # Start at index 10 since first vars are fixed
             value = custom_data[i] if i < len(custom_data) else None  # Ensure index exists
 
             # Adjust formatting based on magnitude
@@ -1434,15 +1445,25 @@ def display_click_data(clickData, sensor_vars):
 
         return html.Div([
             html.Div([
-                html.Span('📽️ Media:', style={'flex': '3', 'text-align': 'left'}),
+                html.Span('📽️ ISIIS 1:', style={'flex': '3', 'text-align': 'left'}),
                 html.A(media, href=media_link, target='_blank', style={'flex': '7', 'text-align': 'right'})
             ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
             
-            html.Div([
-                html.Span('🎞️ Frame:', style={'flex': '1', 'text-align': 'left'}),
-                html.Span(frame, style={'flex': '1', 'text-align': 'right'})
-            ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
+            # html.Div([
+            #     html.Span('🎞️ Frame 1:', style={'flex': '1', 'text-align': 'left'}),
+            #     html.Span(frame, style={'flex': '1', 'text-align': 'right'})
+            # ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
 
+            html.Div([
+                html.Span('📽️ ISIIS 2:', style={'flex': '3', 'text-align': 'left'}),
+                html.A(media_2, href=media_link_2, target='_blank', style={'flex': '7', 'text-align': 'right'})
+            ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
+            
+            # html.Div([
+            #     html.Span('🎞️ Frame 2:', style={'flex': '1', 'text-align': 'left'}),
+            #     html.Span(frame_2, style={'flex': '1', 'text-align': 'right'})
+            # ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
+                        
             html.Div([
                 html.Span('⏳ Time:', style={'flex': '1', 'text-align': 'left'}),
                 html.Span(formatted_time, style={'flex': '1', 'text-align': 'right'})
