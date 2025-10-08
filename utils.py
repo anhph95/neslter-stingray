@@ -732,15 +732,32 @@ def merge_df(df1, df2, on, cols=None, direction='backward', duplicates=False):
 
 ## Data binning
 # Function to bin data based on specified columns and steps
-def bin_data(df, cols, steps): # 15 seconds and 1 meter
-    # Sort the dataframe by the specified columns
-    df = df.copy()#.sort_values(by=cols)
-    
-    # Create bins for each column
+import numpy as np
+import pandas as pd
+
+def bin_data(df, cols, steps):
+    """
+    Bin numeric or datetime columns by given step sizes.
+    NaT values are preserved (not dropped).
+    """
+    df = df.copy()
+
     for col, step in zip(cols, steps):
-        df[f'{col}_bin'] = np.floor((df[col] + step / 2) / step) * step # Round to the nearest step
-        
-    # Return the mean of each group
+        if np.issubdtype(df[col].dtype, np.datetime64):
+            # Initialize with NaT
+            binned = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+
+            # Only apply binning to valid datetimes
+            valid = df[col].notna()
+            binned.loc[valid] = pd.to_datetime(
+                ((df.loc[valid, col].astype("int64") + step // 2) // step) * step
+            )
+
+            df[f"{col}_bin"] = binned
+
+        else:
+            df[f"{col}_bin"] = np.floor((df[col] + step / 2) / step) * step
+
     return df
 
 # Function got get ranges from midpoints

@@ -340,7 +340,7 @@ app.layout = html.Div([
                     )
                 ], style={'margin-bottom': '6px'}),
             ], style={
-                'aspectRatio': '5 / 1',   # matches section-plot
+                'aspectRatio': '4 / 1',   # matches section-plot
                 'marginBottom': '10px',
                 'backgroundColor': '#F0F0F0',
                 'padding': '10px',
@@ -450,7 +450,7 @@ app.layout = html.Div([
                     )
                 ], style={'margin-bottom': '6px'}),
             ], style={
-                'aspectRatio': '2 / 1',   # matches scatter_plot
+                'aspectRatio': '2.5 / 1',   # matches scatter_plot
                 'marginBottom': '10px',
                 'backgroundColor': '#F0F0F0',
                 'padding': '10px',
@@ -504,7 +504,7 @@ app.layout = html.Div([
                     )
                 ], style={'margin-bottom': '6px'}),
             ], style={
-                'aspectRatio': '2 / 1',   # matches ts+profile row
+                'aspectRatio': '2.5 / 1',   # matches ts+profile row
                 'backgroundColor': '#F0F0F0',
                 'padding': '10px',
                 'border-radius': '5px',
@@ -515,14 +515,43 @@ app.layout = html.Div([
 
         # --- MIDDLE PLOTS ---
         html.Div([
-            html.Div([dcc.Graph(id='section-plot')], style={'aspectRatio': '5 / 1', 'marginBottom': '10px'}),
+            html.Div([dcc.Graph(id='section-plot')], style={'aspectRatio': '4 / 1', 'marginBottom': '10px', 'minHeight': '200px', 'width': '100%'}),
             dcc.Store(id='scatter_selected_data'),
-            html.Div([dcc.Graph(id='scatter_plot')], style={'aspectRatio': '2 / 1', 'marginBottom': '10px'}),
+            html.Div([dcc.Graph(id='scatter_plot')], style={'aspectRatio': '2.5 / 1', 'marginBottom': '10px', 'minHeight': '350px', 'width': '100%'}),
             html.Div([
-                dcc.Graph(id='ts_plot', style={'flex': 1, 'margin': '5px'}),
-                dcc.Graph(id='profile_plot', style={'flex': 1, 'margin': '5px'})
-            ], style={'display': 'flex', 'aspectRatio': '2 / 1'})
-        ], style={'flex': '6', 'padding': '8px', 'minWidth': '520px'}),
+                dcc.Graph(
+                    id='ts_plot',
+                    style={
+                        'flex': '1 1 400px',
+                        'margin': '5px',
+                        'minWidth': '300px',
+                        'minHeight': '350px',
+                        'height': '100%',
+                        'overflow': 'hidden'
+                    }
+                ),
+                dcc.Graph(
+                    id='profile_plot',
+                    style={
+                        'flex': '1 1 400px',
+                        'margin': '5px',
+                        'minWidth': '300px',
+                        'minHeight': '350px',
+                        'height': '100%',
+                        'overflow': 'hidden'
+                    }
+                )
+            ], style={
+                'display': 'flex',
+                'flexWrap': 'wrap',           # ✅ allows stacking on small screens
+                'justifyContent': 'space-between',
+                'alignItems': 'stretch',
+                'width': '100%',
+                'boxSizing': 'border-box',
+                'overflow': 'hidden',
+                'minHeight': '350px'
+            })
+        ], style={'flex': '6', 'padding': '8px', 'minWidth': '520px', 'maxWidth': 'calc(100% - 400px)'}),  # Adjusted maxWidth
 
         # --- RIGHT OUTPUT ---
         html.Div([
@@ -537,7 +566,7 @@ app.layout = html.Div([
                 html.Label('End Time:'), dcc.Input(id='end_time', type='text', placeholder='HH:MM:SS',
                     style={'width': '100%', 'font-size': '15px'}),
             ], style={
-                'aspectRatio': '5 / 1',
+                'aspectRatio': '4 / 1',
                 'marginBottom': '10px',
                 'backgroundColor': '#F0F0F0',
                 'padding': '10px',
@@ -547,7 +576,7 @@ app.layout = html.Div([
 
             # Row 2: click output
             html.Div(id='click-output', style={
-                'aspectRatio': '2 / 1',
+                'aspectRatio': '2.5 / 1',
                 'marginBottom': '10px',
                 'backgroundColor': 'white',
                 'padding': '6px',
@@ -556,13 +585,15 @@ app.layout = html.Div([
             }),
 
             # Row 3: spacer to align
-            html.Div([], style={'aspectRatio': '2 / 1'}),
+            html.Div([], style={
+                'aspectRatio': '2.5 / 1',
+            }),
             dcc.Store(id='available-sensor-vars')
-        ], style={'flex': '2', 'padding': '8px', 'minWidth': '200px'})
+        ], style={'flex': '2', 'padding': '8px', 'minWidth': '200px', 'maxWidth': '240px'})
 
     ], style={'display': 'flex', 'flexDirection': 'row'}),
 
-    
+
     # ===== FOOTER (credits) =====
     html.Div([
 

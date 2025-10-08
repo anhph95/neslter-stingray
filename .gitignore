@@ -46,3 +46,4 @@ docker-compose.override.yml
 !dash_data/misc/**
 !assets/
 !assets/**
+*dash_data/misc/profiles_depths.csv
