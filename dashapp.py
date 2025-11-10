@@ -2,10 +2,35 @@ import os
 from pathlib import Path
 import pandas as pd
 import numpy as np
+from urllib.parse import urlencode, urlparse, parse_qs
 import dash
 from dash import dcc, html, ctx, Output, Input, State, Patch, no_update
 import plotly.express as px
 import plotly.graph_objects as go
+
+# --- Utilities ---
+# Units for each variable
+sled_units = {
+    'temperature': '°C',
+    'conductivity': 'S m⁻¹',
+    'pressure': 'dbar',
+    'depth': 'm',
+    'salinity': 'psu',
+    'density': 'kg m⁻³',
+    'latitude': '°',
+    'longitude': '°',
+    'nitrate': 'µM',
+    'par': 'µmol photons m⁻² s⁻¹',
+    'chlorophyll': 'µg l⁻¹',
+    'backscattering': 'm⁻¹ sr⁻¹',
+    'oxygen_concentration': 'µM',
+    'oxygen_saturation': '%',
+    'pitch': '°',
+    'roll': '°',
+    'heading': '°',
+    'altitude': 'm',
+    'sound_velocity': 'm s⁻¹',
+}
 
 # Utility function to calculate seawater density using the IES80 equation
 def ies80(s, t, p=0):
@@ -58,33 +83,82 @@ def ies80(s, t, p=0):
     
     return rho
 
-# Units for each variable
-sled_units = {
-    'temperature': '°C',
-    'conductivity': 'S m⁻¹',
-    'pressure': 'dbar',
-    'depth': 'm',
-    'salinity': 'psu',
-    'density': 'kg m⁻³',
-    'latitude': '°',
-    'longitude': '°',
-    'nitrate': 'µM',
-    'par': 'µmol photons m⁻² s⁻¹',
-    'chlorophyll': 'µg l⁻¹',
-    'backscattering': 'm⁻¹ sr⁻¹',
-    'oxygen_concentration': 'µM',
-    'oxygen_saturation': '%',
-    'pitch': '°',
-    'roll': '°',
-    'heading': '°',
-    'altitude': 'm',
-    'sound_velocity': 'm s⁻¹',
-}
-
 # Function to scan for CSV files
-def get_csv_files():
-    return sorted(f.stem for f in data_dir.glob("*.csv")) if data_dir.exists() else []
+def get_csv_files() -> list:
+    """Return a sorted list of available CSV filenames (without extension)."""
+    if not data_dir.exists():
+        return []
+    return sorted(f.stem for f in data_dir.glob("*.csv") if f.is_file())
 
+# Function to load major CSV files
+def load_data(file_name: str, sub_sample: int = 1) -> pd.DataFrame:
+    """
+    Load a CSV file into a pandas DataFrame, perform preprocessing,
+    and apply optional sub-sampling.
+
+    Caching: Only one file is kept in memory at a time. If the same file
+    is requested again, it will be returned from cache.
+
+    Args:
+        file_name (str): Filename (without .csv extension)
+        sub_sample (int): Keep every Nth row (for performance)
+
+    Returns:
+        pd.DataFrame: Cleaned and optionally subsampled data
+    """
+    global DATA_CACHE, CURRENT_FILE
+
+    # --- Return cached dataset if already loaded ---
+    if file_name == CURRENT_FILE and file_name in DATA_CACHE:
+        df = DATA_CACHE[file_name]
+
+    else:
+        # --- Clear old cache and load new file ---
+        DATA_CACHE.clear()
+        CURRENT_FILE = file_name
+
+        csv_path = data_dir / f"{file_name}.csv"
+        df = pd.read_csv(csv_path, low_memory=False)
+
+        # --- Ensure datetime format for 'times' column ---
+        if "times" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["times"]):
+            df["times"] = pd.to_datetime(df["times"], errors="coerce", cache=True)
+
+        # --- Add missing media-related columns ---
+        media_cols = [
+            "media", "frame", "media_path", "id", "link",
+            "media_2", "frame_2", "media_path_2", "id_2", "link_2"
+        ]
+        for col in media_cols:
+            if col not in df.columns:
+                df[col] = np.nan
+
+        # --- Filter out invalid geographic coordinates ---
+        if {"longitude", "latitude"}.issubset(df.columns):
+            df = df[
+                df["longitude"].between(-180, 180, inclusive="both") &
+                df["latitude"].between(-90, 90, inclusive="both")
+            ]
+
+        # --- Convert key numeric columns ---
+        for col in ["depth", "latitude", "longitude"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # --- Cache the cleaned DataFrame ---
+        DATA_CACHE[file_name] = df
+
+    # --- Apply optional sub-sampling ---
+    if sub_sample and sub_sample > 0:
+        df = df.iloc[::sub_sample, :]
+
+    return df.reset_index(drop=True)
+
+# Function to load auxiliary CSV files (stations, bathymetry)
+def load_csv(path: Path) -> pd.DataFrame | None:
+    """Read a CSV file if it exists; return None otherwise."""
+    return pd.read_csv(path, dtype=str, encoding="utf-8") if path.exists() else None
+    
 # ========== Command-line interface ==========
 def cli():
     import argparse
@@ -93,85 +167,75 @@ def cli():
     parser.add_argument('--port', type=int, help='Port number for the Dash app, default is 8050', default=8050)
     return parser.parse_args()
 
-# ========== Dash App Initialization ==========
+# ============================================
+# Dash Application Initialization
+# ============================================
+
+# --- Initialize Dash app ---
 app = dash.Dash(__name__)
 
-# Number of processes for the server
-n_process = min(os.cpu_count()-1, 8) 
+# Use up to 8 worker processes or one less than CPU count
+n_process = min(os.cpu_count() - 1, 8)
 
-# Define working directory and subdirectories
-work_dir = Path('/dash_data') if Path('/dash_data').is_dir() else Path('dash_data')
-data_dir, misc_dir = work_dir / 'data', work_dir / 'misc'
+# Define working directories (use mounted /dash_data if available)
+work_dir = Path("/dash_data") if Path("/dash_data").is_dir() else Path("dash_data")
+data_dir = work_dir / "data"   # Folder for data CSVs
+misc_dir = work_dir / "misc"   # Folder for static support files
 
-# Global cache for one dataset at a time
+# Cache for a single dataset in memory
 DATA_CACHE = {}
 CURRENT_FILE = None
 
-def load_data(file_name, sub_sample=1):
-    """
-    Load CSV file into a DataFrame, preprocess it, and filter invalid coordinates.
-    Keeps only one file cached in memory at a time.
-    """
-    global DATA_CACHE, CURRENT_FILE
-
-    # Return cached if same file already loaded
-    if file_name == CURRENT_FILE and file_name in DATA_CACHE:
-        df = DATA_CACHE[file_name]
-    else:
-        # Clear cache and load new file
-        DATA_CACHE.clear()
-        CURRENT_FILE = file_name
-
-        df = pd.read_csv(f"{data_dir}/{file_name}.csv", low_memory=False)
-
-        # Ensure 'times' column is datetime
-        if not pd.api.types.is_datetime64_any_dtype(df['times']):
-            df['times'] = pd.to_datetime(df['times'], errors='coerce', cache=True)
-
-        # Add missing columns
-        for col in ['media', 'frame', 'media_path', 'id', 'link', 'media_2', 'frame_2', 'media_path_2', 'id_2', 'link_2']:
-            if col not in df.columns:
-                df[col] = np.nan
-
-        # Filter invalid coordinates
-        if 'longitude' in df.columns and 'latitude' in df.columns:
-            df = df[
-                (df['longitude'].between(-180, 180, inclusive="both")) &
-                (df['latitude'].between(-180, 180, inclusive="both"))
-            ]
-
-        # Save in cache
-        DATA_CACHE[file_name] = df
-
-    # Apply subsampling (only if > 0)
-    if sub_sample and sub_sample > 0:
-        return df.iloc[::sub_sample, :].reset_index(drop=True)
-    else:
-        return df.reset_index(drop=True)
-
-# Initial dataset
+# Load initial dataset (last CSV alphabetically)
 csv_files = get_csv_files()
-if csv_files:
-    df = load_data(csv_files[-1])
-else:
-    df = pd.DataFrame()
+df = load_data(csv_files[-1]) if csv_files else pd.DataFrame()
 
-# Define variables for dropdowns
-meta_vars = ['timestamp', 'times', 'matdate', 'latitude', 'longitude', 'depth', 'media', 'media_path', 'frame', 'id', 'link', 'media_2', 'media_path_2', 'frame_2', 'id_2', 'link_2']
-sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars] if not df.empty else []
-colormaps = [name for name in px.colors.sequential.__dict__ if not name.startswith('_')]
+# Variable Lists for Dropdowns
+meta_vars = [
+    "timestamp", "times", "matdate",
+    "latitude", "longitude", "depth",
+    "media", "media_path", "frame", "id", "link",
+    "media_2", "media_path_2", "frame_2", "id_2", "link_2"
+]
 
-# Load bathymetry and station data if files exist
-load_csv = lambda file: pd.read_csv(file, dtype=str, encoding="utf-8") if file.exists() else None
-stations, bathy = map(load_csv, [misc_dir / 'NESLTER_station_list.csv', misc_dir / 'NESLTER_transect_bathymetry.csv'])
-stations['latitude'] = pd.to_numeric(stations['latitude'], errors='coerce')
-bathy['latitude'] = pd.to_numeric(bathy['latitude'], errors='coerce')
+sensor_vars = [
+    col for col in df.columns
+    if "_std" not in col and col not in meta_vars
+] if not df.empty else []
+
+# Colormaps available from Plotly
+colormaps = [
+    name for name in px.colors.sequential.__dict__
+    if not name.startswith("_")
+]
+
+
+# Load Auxiliary Data (Stations & Bathymetry)
+stations = load_csv(misc_dir / "NESLTER_station_list.csv")
+bathy = load_csv(misc_dir / "NESLTER_transect_bathymetry.csv")
+
+if stations is not None:
+    stations["latitude"] = pd.to_numeric(stations["latitude"], errors="coerce")
+
+if bathy is not None:
+    bathy["latitude"] = pd.to_numeric(bathy["latitude"], errors="coerce")
+    bathy["bottom_depth_meters"] = pd.to_numeric(bathy["bottom_depth_meters"], errors="coerce")
 
 # ========================
 # App Layout
 # ========================
 
 app.layout = html.Div([
+    dcc.Location(id='url', refresh=False),
+    # Automatic file checking
+    dcc.Interval(
+        id="file-scan-interval",
+        interval=60 * 1000,  # every 60 seconds
+        n_intervals=0,
+    ),
+
+    # Store the last known file modification times
+    dcc.Store(id="file-snapshot", data={}),
 
     # ===== TOP HEADER =====
     html.Div([
@@ -511,7 +575,7 @@ app.layout = html.Div([
                 'box-shadow': '0px 2px 5px rgba(0,0,0,0.1)'
             })
 
-        ], style={'flex': '2', 'padding': '8px', 'minWidth': '200px', 'maxWidth': '240px'}),
+        ], style={'flex': '2', 'padding': '8px', 'minWidth': '150px', 'maxWidth': '200px'}),
 
         # --- MIDDLE PLOTS ---
         html.Div([
@@ -522,36 +586,39 @@ app.layout = html.Div([
                 dcc.Graph(
                     id='ts_plot',
                     style={
-                        'flex': '1 1 400px',
+                        'flex': '1 1 45%',             # take up to ~40% width each
                         'margin': '5px',
-                        'minWidth': '300px',
-                        'minHeight': '350px',
-                        'height': '100%',
-                        'overflow': 'hidden'
+                        'aspectRatio': '4 / 5',        # width:height = 4:5 → height:width ≈ 1.25:1
+                        # 'maxWidth': '45%',
+                        'minWidth': '200px',
+                        'overflow': 'hidden',
+                        'boxSizing': 'border-box'
                     }
                 ),
                 dcc.Graph(
                     id='profile_plot',
                     style={
-                        'flex': '1 1 400px',
+                        'flex': '1 1 45%',
                         'margin': '5px',
-                        'minWidth': '300px',
-                        'minHeight': '350px',
-                        'height': '100%',
-                        'overflow': 'hidden'
+                        'aspectRatio': '4 / 5',
+                        # 'maxWidth': '45%',
+                        'minWidth': '200px',
+                        'overflow': 'hidden',
+                        'boxSizing': 'border-box'
                     }
                 )
             ], style={
                 'display': 'flex',
-                'flexWrap': 'wrap',           # ✅ allows stacking on small screens
+                'flexWrap': 'wrap',              # ✅ only wraps when truly needed
                 'justifyContent': 'space-between',
                 'alignItems': 'stretch',
                 'width': '100%',
                 'boxSizing': 'border-box',
                 'overflow': 'hidden',
-                'minHeight': '350px'
+                'gap': '5px',
+                'padding': '5px'
             })
-        ], style={'flex': '6', 'padding': '8px', 'minWidth': '520px', 'maxWidth': 'calc(100% - 400px)'}),  # Adjusted maxWidth
+        ], style={'flex': '6', 'padding': '8px', 'minWidth': '500px', 'maxWidth': 'calc(100% - 350px)'}),  # Adjusted maxWidth
 
         # --- RIGHT OUTPUT ---
         html.Div([
@@ -589,7 +656,7 @@ app.layout = html.Div([
                 'aspectRatio': '2.5 / 1',
             }),
             dcc.Store(id='available-sensor-vars')
-        ], style={'flex': '2', 'padding': '8px', 'minWidth': '200px', 'maxWidth': '240px'})
+        ], style={'flex': '2', 'padding': '8px', 'minWidth': '200px', 'maxWidth': '350px'})
 
     ], style={'display': 'flex', 'flexDirection': 'row'}),
 
@@ -635,6 +702,73 @@ app.layout = html.Div([
     'margin': 'auto',
     'fontFamily': 'Arial'
 })
+
+# --- Callback to populate URL ---
+URL_SYNCED_PARAMS = [
+    {"key": "dataset",   "id": "csv_selector",   "default": None,          "type": "string"},
+    {"key": "variable",  "id": "color_variable", "default": "temperature", "type": "string"},
+    {"key": "colormap",  "id": "color_map",      "default": "Jet",         "type": "string"},
+    {"key": "zmin",      "id": "z_min",          "default": 0,             "type": "float"},
+    {"key": "zmax",      "id": "z_max",          "default": 200,           "type": "float"},
+    {"key": "opacity",   "id": "hidden_opacity", "default": 0.05,          "type": "float"},
+    {"key": "subsample", "id": "sub_sample",     "default": 3,             "type": "int"},
+]
+
+@app.callback(
+    Output("url", "search"),
+    [Input(p["id"], "value") for p in URL_SYNCED_PARAMS],
+    prevent_initial_call=True
+)
+def update_url(*values):
+    params = {
+        p["key"]: val for p, val in zip(URL_SYNCED_PARAMS, values)
+        if val not in [None, "", []]
+    }
+    return f"?{urlencode(params)}" if params else ""
+
+@app.callback(
+    [
+        Output(p["id"], "value", allow_duplicate=True)
+        for p in URL_SYNCED_PARAMS
+    ],
+    Input("url", "search"),
+    Input("csv_selector", "options"),  # ensures dataset options are loaded
+    prevent_initial_call="initial_duplicate",
+)
+def restore_from_url(search, csv_options):
+    # prepare defaults, dataset needs to look at csv_options
+    csv_files = [opt["value"] for opt in (csv_options or [])]
+    defaults = {
+        p["key"]: (
+            csv_files[-1] if p["key"] == "dataset" and csv_files else p["default"]
+        )
+        for p in URL_SYNCED_PARAMS
+    }
+
+    if not search:
+        return [defaults[p["key"]] for p in URL_SYNCED_PARAMS]
+
+    params = parse_qs(urlparse(search).query)
+
+    results = []
+    for p in URL_SYNCED_PARAMS:
+        key, typ = p["key"], p["type"]
+        val = params.get(key, [defaults[key]])[0]
+
+        # type casting
+        if typ in ("int", "float"):
+            try:
+                val = int(val) if typ == "int" else float(val)
+            except (ValueError, TypeError):
+                val = defaults[key]
+
+        # ensure dataset exists
+        if key == "dataset" and val not in csv_files:
+            val = defaults[key]
+
+        results.append(val)
+
+    return results
 
 # --- Callback to populate CSV selector and ensure valid default selection ---
 @app.callback(
@@ -1104,7 +1238,7 @@ def update_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_tim
     # --- Optional overlays ---
     # Bathymetry
     if 'True' in bathymetry and bathy is not None and x_axis == 'latitude':
-        bathy_mask = (bathy['latitude'] <= df['latitude'].max() + 0.1) & (bathy['latitude'] >= df['latitude'].min() - 0.1)
+        bathy_mask = (bathy['latitude'] <= df['latitude'].max() + 0.1) & (bathy['latitude'] >= df['latitude'].min() - 0.1) 
         fig.add_trace(
             go.Scatter(
                 x=bathy['latitude'][bathy_mask],
@@ -1290,7 +1424,7 @@ def update_ts_plot(csv_file, sub_sample, start_date, start_time, end_date,  end_
         Input('start_time', 'value'),
         Input('end_date', 'value'),
         Input('end_time', 'value'),
-        Input('color_variable', 'value'),
+        Input('ts_color_variable', 'value'),
         Input('v_min', 'value'),
         Input('v_max', 'value'),
         Input('z_min', 'value'),
@@ -1479,22 +1613,12 @@ def display_click_data(clickData, sensor_vars):
                 html.Span('📽️ ISIIS 1:', style={'flex': '3', 'text-align': 'left'}),
                 html.A(media, href=media_link, target='_blank', style={'flex': '7', 'text-align': 'right'})
             ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
-            
-            # html.Div([
-            #     html.Span('🎞️ Frame 1:', style={'flex': '1', 'text-align': 'left'}),
-            #     html.Span(frame, style={'flex': '1', 'text-align': 'right'})
-            # ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
 
             html.Div([
                 html.Span('📽️ ISIIS 2:', style={'flex': '3', 'text-align': 'left'}),
                 html.A(media_2, href=media_link_2, target='_blank', style={'flex': '7', 'text-align': 'right'})
             ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
-            
-            # html.Div([
-            #     html.Span('🎞️ Frame 2:', style={'flex': '1', 'text-align': 'left'}),
-            #     html.Span(frame_2, style={'flex': '1', 'text-align': 'right'})
-            # ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
-                        
+
             html.Div([
                 html.Span('⏳ Time:', style={'flex': '1', 'text-align': 'left'}),
                 html.Span(formatted_time, style={'flex': '1', 'text-align': 'right'})
