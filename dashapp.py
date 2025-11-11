@@ -129,6 +129,11 @@ def load_data(file_name: str, sub_sample: int = 1) -> pd.DataFrame:
 
     # Load fresh
     df = pd.read_csv(csv_path, low_memory=False)
+
+    # ✅ Ensure stable, persistent point_id across reloads and callbacks
+    if "point_id" not in df.columns:
+        df["point_id"] = np.arange(len(df))
+
     FILE_TIMESTAMP[file_name] = mtime
     CURRENT_FILE = file_name
     DATA_CACHE.clear()
@@ -593,10 +598,10 @@ def draw_cruise_track(csv_file, xaxis, yaxis, sub_sample):
         return px.scatter()
 
     df = load_data(csv_file, sub_sample=sub_sample)
-    df['point_id'] = df.index
+    #df['point_id'] = df.index
 
     # --- Base scatter plot ---
-    fig = px.scatter(df, x=xaxis, y='latitude', custom_data=['point_id'])
+    fig = px.scatter(df, x=xaxis, y=yaxis, custom_data=['point_id'])
     fig.update_traces(
         mode='markers',
         selected=dict(marker=dict(color='red')),
@@ -616,7 +621,7 @@ def draw_cruise_track(csv_file, xaxis, yaxis, sub_sample):
             showline=True, linecolor='black', mirror=True
         ),
         yaxis=dict(
-            title='Latitude',
+            title=yaxis.capitalize(),
             autorange=True,
             fixedrange=False,
             showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
@@ -649,7 +654,7 @@ def store_cruise_track_selection(selectedData, csv_file):
     If selection is cleared (double-click), return all points instead of empty.
     """
     df = load_data(csv_file)
-    df['point_id'] = df.index
+    #df['point_id'] = df.index
 
     if not selectedData or "points" not in selectedData or not selectedData["points"]:
         selected_ids = df["point_id"].tolist()
@@ -809,7 +814,7 @@ def update_main_plot(csv_file, sub_sample,
         )
 
     df = load_data(csv_file, sub_sample=sub_sample)
-    df['point_id'] = df.index
+    #df['point_id'] = df.index
     sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
 
     # --------------------------------------------------------
@@ -1017,7 +1022,7 @@ def update_ts_plot(csv_file, sub_sample,
         )
 
     df = load_data(csv_file, sub_sample=sub_sample)
-    df['point_id'] = df.index
+    #df['point_id'] = df.index
     sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
 
     # --------------------------------------------------------
@@ -1189,7 +1194,7 @@ def update_profile_plot(csv_file, sub_sample,
         ), []
 
     df = load_data(csv_file, sub_sample=sub_sample)
-    df['point_id'] = df.index
+    #df['point_id'] = df.index
 
     # --------------------------------------------------------
     # 2️⃣ Apply Cruise Track Selection (Primary Filter)
@@ -1453,7 +1458,7 @@ if __name__ == '__main__':
     # Command-line arguments
     args = cli()
     args.port = str(args.port)
-    app.run(host=args.host, port=args.port, processes=MAX_WORKERS, threaded=False, debug=True)
+    app.run(host=args.host, port=args.port, processes=MAX_WORKERS, threaded=False, debug=False)
 else:
     # WSGI-compatible Flask server (eg gunicorn)
     application = app.server
