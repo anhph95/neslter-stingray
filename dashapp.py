@@ -307,6 +307,15 @@ app.layout = html.Div([
                     )
                 ]),
                 html.Div([
+                    html.Label('Y-Axis:'),
+                    dcc.Dropdown(
+                        id='y_axis_variable',
+                        options=[{'label': var.capitalize(), 'value': var}
+                                 for var in ['depth','latitude']],
+                        value='depth'
+                    )
+                ]),            
+                html.Div([
                     html.Label('Color Variable:'),
                     dcc.Dropdown(
                         id='color_variable',
@@ -331,12 +340,20 @@ app.layout = html.Div([
                     dcc.Input(id='z_max', type='number', value=200)
                 ]),
                 html.Div([
-                    html.Label('Min Coordinate:'),
-                    dcc.Input(id='coord_min', type='number', value=None)
+                    html.Label('Min Latitude:'),
+                    dcc.Input(id='lat_min', type='number', value=None)
                 ]),
                 html.Div([
-                    html.Label('Max Coordinate:'),
-                    dcc.Input(id='coord_max', type='number', value=None)
+                    html.Label('Max Latitude:'),
+                    dcc.Input(id='lat_max', type='number', value=None)
+                ]),
+                html.Div([
+                    html.Label('Min Longitude:'),
+                    dcc.Input(id='lon_min', type='number', value=None)
+                ]),
+                html.Div([
+                    html.Label('Max Longitude:'),
+                    dcc.Input(id='lon_max', type='number', value=None)
                 ]),
                 html.Div([
                     html.Label('Color Min:'),
@@ -676,29 +693,41 @@ def store_cruise_track_selection(selectedData, csv_file):
     prevent_initial_call=True
 )
 def mirror_selection(scatter_sel, ts_sel, fig_scatter, fig_ts):
-    """Synchronize selections between scatter and time-series plots."""
     trigger = ctx.triggered_id
-    selected_ids = None
-
-    if trigger == "main_plot" and scatter_sel and scatter_sel.get("points"):
-        selected_ids = [p.get("customdata", [None])[0] for p in scatter_sel["points"] if p.get("customdata")]
-    elif trigger == "ts_plot" and ts_sel and ts_sel.get("points"):
-        selected_ids = [p.get("customdata", [None])[0] for p in ts_sel["points"] if p.get("customdata")]
-
-    # None means “select all”
     patched_scatter = Patch()
     patched_ts = Patch()
 
-    if "data" in fig_scatter:
-        for i, _ in enumerate(fig_scatter["data"]):
-            patched_scatter["data"][i]["selectedpoints"] = selected_ids
+    # --- Detect clearing (double-click) ---
+    if trigger == "main_plot" and not scatter_sel:
+        for i, _ in enumerate(fig_ts.get("data", [])):
+            patched_ts["data"][i]["selectedpoints"] = None
+        for i, _ in enumerate(fig_scatter.get("data", [])):
+            patched_scatter["data"][i]["selectedpoints"] = None
+        return patched_scatter, patched_ts
 
-    if "data" in fig_ts:
-        for i, _ in enumerate(fig_ts["data"]):
-            patched_ts["data"][i]["selectedpoints"] = selected_ids
+    if trigger == "ts_plot" and not ts_sel:
+        for i, _ in enumerate(fig_scatter.get("data", [])):
+            patched_scatter["data"][i]["selectedpoints"] = None
+        for i, _ in enumerate(fig_ts.get("data", [])):
+            patched_ts["data"][i]["selectedpoints"] = None
+        return patched_scatter, patched_ts
+
+    # --- Normal selection sync ---
+    selected_ids = set()
+    if trigger == "main_plot" and scatter_sel and scatter_sel.get("points"):
+        selected_ids = {p["customdata"][0] for p in scatter_sel["points"] if p.get("customdata")}
+    elif trigger == "ts_plot" and ts_sel and ts_sel.get("points"):
+        selected_ids = {p["customdata"][0] for p in ts_sel["points"] if p.get("customdata")}
+
+    for fig, patch in [(fig_scatter, patched_scatter), (fig_ts, patched_ts)]:
+        for i, trace in enumerate(fig.get("data", [])):
+            if "customdata" not in trace:
+                continue
+            custom_ids = [c[0] for c in trace["customdata"] if c and len(c) > 0]
+            selected_idx = [j for j, pid in enumerate(custom_ids) if pid in selected_ids]
+            patch["data"][i]["selectedpoints"] = selected_idx or None
 
     return patched_scatter, patched_ts
-
 
 # --- Callback: Store selected IDs from main plot (for cross-plot filtering) ---
 @app.callback(
@@ -717,24 +746,24 @@ def store_scatter_selection_indices(selectedData):
 # --- Callback: Track user coordinate/range edits ---
 @app.callback(
     Output('user_range_change', 'data'),
-    Input('coord_min', 'value'),
-    Input('coord_max', 'value'),
+    Input('lat_min', 'value'),
+    Input('lat_max', 'value'),
     Input('z_min', 'value'),
     Input('z_max', 'value'),
-    State('coord_min', 'value'),
-    State('coord_max', 'value'),
+    State('lat_min', 'value'),
+    State('lat_max', 'value'),
     State('z_min', 'value'),
     State('z_max', 'value'),
     State('user_range_change', 'data'),
     prevent_initial_call=True
 )
-def track_range_change(coord_min, coord_max, ymin, ymax,
-                       prev_coord_min, prev_coord_max, prev_ymin, prev_ymax,
+def track_range_change(lat_min, lat_max, ymin, ymax,
+                       prev_lat_min, prev_lat_max, prev_ymin, prev_ymax,
                        was_changed):
     """Track if the user manually changed coordinate or depth limits."""
     changed = any([
-        coord_min != prev_coord_min,
-        coord_max != prev_coord_max,
+        lat_min != prev_lat_min,
+        lat_max != prev_lat_max,
         ymin != prev_ymin,
         ymax != prev_ymax
     ])
@@ -767,14 +796,17 @@ def track_range_change(coord_min, coord_max, ymin, ymax,
         Input('csv_selector', 'value'),
         Input('sub_sample', 'value'),
         Input('x_axis_variable', 'value'),
+        Input('y_axis_variable', 'value'),
         Input('color_variable', 'value'),
         Input('color_map', 'value'),
         Input('v_min', 'value'),
         Input('v_max', 'value'),
         Input('z_min', 'value'),
         Input('z_max', 'value'),
-        Input('coord_min', 'value'),
-        Input('coord_max', 'value'),
+        Input('lat_min', 'value'),
+        Input('lat_max', 'value'),
+        Input('lon_min', 'value'),
+        Input('lon_max', 'value'),
         Input('hidden_opacity', 'value'),
         Input('bathymetry', 'value'),
         Input('station', 'value'),
@@ -784,8 +816,8 @@ def track_range_change(coord_min, coord_max, ymin, ymax,
     State('cruise_track_selected_data', 'data'),
 )
 def update_main_plot(csv_file, sub_sample,
-                     x_axis, color_var, color_map, vmin, vmax,
-                     zmin, zmax, coord_min, coord_max,
+                     x_axis, y_axis, color_var, color_map, vmin, vmax,
+                     zmin, zmax, lat_min, lat_max, lon_min, lon_max,
                      hidden_opacity, bathymetry, station,
                      user_changed_range, cruise_track_flag, cruise_track_selection):
     """
@@ -822,7 +854,7 @@ def update_main_plot(csv_file, sub_sample,
     # --------------------------------------------------------
     if cruise_track_selection and "selected_ids" in cruise_track_selection:
         selected_ids = cruise_track_selection["selected_ids"]
-        df = df[df['point_id'].isin(selected_ids)].reset_index(drop=True)
+        df = df[df['point_id'].isin(selected_ids)]#.reset_index(drop=True)
 
     if df.empty:
         return (
@@ -848,7 +880,7 @@ def update_main_plot(csv_file, sub_sample,
     fig = px.scatter(
         df,
         x=x_axis,
-        y='depth',
+        y=y_axis,
         color=color_var,
         color_continuous_scale=color_map,
         range_color=[vmin, vmax],
@@ -872,30 +904,39 @@ def update_main_plot(csv_file, sub_sample,
     # --------------------------------------------------------
     if x_axis == 'latitude':
         # Latitude axis — reversed so north (max) is left
-        x_range = [coord_max, coord_min] if (coord_min and coord_max) else \
+        x_range = [lat_max, lat_min] if (lat_min and lat_max) else \
                   [df['latitude'].max() + 0.1, df['latitude'].min() - 0.1]
-        ticks = np.linspace(x_range[1], x_range[0], 6)
-        tickvals = ticks
-        ticktext = [f"{abs(v):.1f}°{'N' if v >= 0 else 'S'}" for v in ticks]
+        xticks = np.linspace(x_range[1], x_range[0], 6)
+        xticktext = [f"{abs(v):.1f}°{'N' if v >= 0 else 'S'}" for v in xticks]
 
     elif x_axis == 'longitude':
-        x_range = [coord_min, coord_max] if (coord_min and coord_max) else \
+        x_range = [lon_min, lon_max] if (lon_min and lon_max) else \
                   [df['longitude'].min() - 0.1, df['longitude'].max() + 0.1]
-        ticks = np.linspace(x_range[0], x_range[1], 6)
-        tickvals = ticks
-        ticktext = [f"{abs(v):.1f}°{'E' if v >= 0 else 'W'}" for v in ticks]
+        xticks = np.linspace(x_range[0], x_range[1], 6)
+        xticktext = [f"{abs(v):.1f}°{'E' if v >= 0 else 'W'}" for v in xticks]
 
     elif x_axis == 'times':
-        x_range = [coord_min, coord_max] if (coord_min and coord_max) else \
-                  [df['times'].min(), df['times'].max()]
-        tickvals, ticktext = None, None
-
+        x_range = [df['times'].min(), df['times'].max()]
+        xticks, xticktext = None, None
+        
     else:
-        x_range, tickvals, ticktext = None, None, None
+        x_range, xticks, xticktext = None, None, None
 
-    # Depth axis (reversed)
-    y_range = [zmax, zmin - 10] if (zmin is not None and zmax is not None) else \
-              [df['depth'].max(), df['depth'].min()]
+    if y_axis == 'depth':
+        y_range = [zmax, zmin - 10] if (zmin is not None and zmax is not None) else \
+                [df['depth'].max(), df['depth'].min() - 10]
+        yticks, yticktext = None, None
+        ylabel = 'Depth (m)'
+        
+    elif y_axis == 'longitude':
+        y_range = [lon_min, lon_max] if (lon_min and lon_max) else \
+            [df['longitude'].min() - 0.1, df['longitude'].max() + 0.1]
+        yticks = np.linspace(y_range[0], y_range[1], 6)
+        yticktext = [f"{abs(v):.1f}°{'E' if v >= 0 else 'W'}" for v in yticks]
+        ylabel = y_axis.capitalize()
+        
+    else:
+        y_range, yticks, yticktext, ylabel = None, None, None, y_axis.capitalize()
 
     # --------------------------------------------------------
     # 6️⃣ Layout & Appearance
@@ -909,23 +950,25 @@ def update_main_plot(csv_file, sub_sample,
         xaxis=dict(
             title=x_axis.capitalize(),
             range=x_range,
-            tickvals=tickvals,
-            ticktext=ticktext,
+            tickvals=xticks,
+            ticktext=xticktext,
             showgrid=True, gridcolor='rgba(0,0,0,0.1)',
             showline=True, linecolor='black', mirror=True,
             ticks='outside', tickwidth=1, tickcolor='black',
             rangeslider=dict(visible=False)
         ),
         yaxis=dict(
-            title='Depth (m)',
+            title=ylabel,
             range=y_range,
+            tickvals=yticks,
+            ticktext=yticktext,
             showgrid=True, gridcolor='rgba(0,0,0,0.1)',
             showline=True, linecolor='black', mirror=True,
             ticks='outside', tickwidth=1, tickcolor='black'
         ),
         coloraxis_colorbar=dict(
             title=dict(
-                text=f'<br><br>&nbsp;{color_var.replace("_", " ").capitalize()} '
+                text=f'{color_var.replace("_", " ").capitalize()} '
                      f'({sled_units.get(color_var, "")})',
                 side='bottom'
             ),
@@ -940,7 +983,7 @@ def update_main_plot(csv_file, sub_sample,
     # --------------------------------------------------------
     # 7️⃣ Optional Overlays (Bathymetry & Stations)
     # --------------------------------------------------------
-    if 'True' in bathymetry and bathy is not None and x_axis == 'latitude':
+    if 'True' in bathymetry and bathy is not None and x_axis == 'latitude' and y_axis == 'depth':
         bathy_mask = (
             (bathy['latitude'] <= df['latitude'].max() + 0.1) &
             (bathy['latitude'] >= df['latitude'].min() - 0.1)
@@ -956,7 +999,7 @@ def update_main_plot(csv_file, sub_sample,
             )
         )
 
-    if 'True' in station and stations is not None and x_axis == 'latitude':
+    if 'True' in station and stations is not None and x_axis == 'latitude' and y_axis == 'depth':
         fig.update_layout(
             annotations=[
                 dict(
@@ -1030,7 +1073,7 @@ def update_ts_plot(csv_file, sub_sample,
     # --------------------------------------------------------
     if cruise_track_selection and "selected_ids" in cruise_track_selection:
         selected_ids = cruise_track_selection["selected_ids"]
-        df = df[df['point_id'].isin(selected_ids)].reset_index(drop=True)
+        df = df[df['point_id'].isin(selected_ids)]#.reset_index(drop=True)
 
     # --------------------------------------------------------
     # 3️⃣ Handle Empty Data

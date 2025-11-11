@@ -193,7 +193,7 @@ select {
 }
 
 .profile-graph {
-  width: 50%;
+  width: 75%;
   aspect-ratio: 3 / 4;
   min-height: 200px;
 }
