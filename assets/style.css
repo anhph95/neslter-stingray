@@ -1,0 +1,263 @@
+/* ===========================
+   GLOBAL LAYOUT
+   =========================== */
+body {
+  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  background-color: #fff;
+  overflow-x: hidden;
+}
+
+._dash-container {
+  max-width: 99%;
+  margin: auto;
+  padding: 5px;
+}
+
+/* Headings */
+h1, h2, h3 {
+  color: #183554;
+}
+
+/* ===========================
+   FLEX LAYOUT
+   =========================== */
+.flex-row {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.flex-col {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===========================
+   PANELS + CARDS
+   =========================== */
+.panel,
+.card {
+  background-color: #f8f8f8;
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  padding: 10px;
+  margin-bottom: 10px;
+  box-sizing: border-box;
+}
+
+.card {
+  background-color: #fff;
+}
+
+/* ===========================
+   HEADER + FOOTER
+   =========================== */
+.header-top, .header-sub, .footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 99%;
+  margin: auto;
+  border-radius: 5px;
+  box-sizing: border-box;
+}
+
+.header-top {
+  background-color: #183554;
+  padding: 5px 16px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+}
+
+.header-sub {
+  background-color: #fff;
+  padding: 8px 16px;
+  margin-bottom: 10px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.header-title {
+  color: #183554;
+  font-size: 30px;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.footer {
+  background-color: #183554;
+  color: white;
+  padding: 6px 12px;
+  font-size: 14px;
+  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* ===========================
+   BUTTONS
+   =========================== */
+button {
+  font-size: 15px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  color: #fff;
+  transition: background-color 0.2s ease;
+}
+
+#refresh-button {
+  background-color: #007bff;
+  margin-bottom: 6px;
+}
+
+#refresh-button:hover {
+  background-color: #0056b3;
+}
+
+/* ===========================
+   LABELS + INPUTS
+   =========================== */
+.section-label {
+  font-weight: bold;
+  font-size: 18px;
+  color: #183554;
+  margin-bottom: 6px;
+}
+
+label {
+  font-size: 14px;
+  color: #183554;
+}
+
+input[type="number"],
+input[type="text"],
+select {
+  font-size: 14px;
+  width: 100%;
+  padding: 4px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+/* ===========================
+   TAB STYLING (Chrome-like)
+   =========================== */
+.tab-style {
+  background-color: #e6e9ef;
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+  margin-right: 5px;
+  padding: 6px 16px;
+  font-size: 14px;
+  color: #183554;
+  border: 1px solid #ccc;
+  border-bottom: none;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+
+.tab-style:hover {
+  background-color: #d9dde3;
+}
+
+.tab-selected {
+  background-color: #fff;
+  border-bottom: 2px solid white;
+  font-weight: bold;
+  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* ===========================
+   GRAPHS
+   =========================== */
+.cruise-track-graph {
+  width: 100%;
+  aspect-ratio: 2.5 / 1;
+  min-height: 300px;
+}
+
+.main-graph {
+  width: 100%;
+  aspect-ratio: 1.5 / 1;
+  min-height: 400px;
+}
+
+.ts-graph {
+  width: 75%;
+  aspect-ratio: 1 / 1;
+  min-height: 200px;
+}
+
+.profile-graph {
+  width: 50%;
+  aspect-ratio: 3 / 4;
+  min-height: 200px;
+}
+
+/* ===========================
+   PANEL WIDTHS
+   =========================== */
+.left-panel {
+  flex: 2;
+  min-width: 200px;
+  max-width: 260px;
+}
+
+.middle-panel {
+  flex: 6;
+  min-width: 550px;
+  max-width: calc(100% - 440px);
+}
+
+/* ✅ Right Panel — Wider + Smaller Text */
+.right-panel {
+  flex: 3.8;                /* wider */
+  min-width: 320px;
+  max-width: 480px;
+  font-size: 13px;          /* smaller text overall */
+  color: #183554;
+  line-height: 1.35;
+  padding-left: 8px;
+}
+
+.right-panel .section-label {
+  font-size: 16px;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.right-panel .card {
+  font-size: 13px;
+  padding: 6px 8px;
+  background-color: #fff;
+  border-radius: 5px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  max-height: 1000px;
+  overflow-y: auto;
+}
+
+/* ===========================
+   RESPONSIVE ADJUSTMENTS
+   =========================== */
+@media (max-width: 1200px) {
+  .right-panel {
+    flex: 3;
+    max-width: 420px;
+  }
+}
+
+@media (max-width: 992px) {
+  .header-title {
+    font-size: 26px;
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    overflow-x: auto;
+  }
+}
