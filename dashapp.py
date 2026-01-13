@@ -17,7 +17,7 @@ DEFAULT_SUBSAMPLE = 3
 MAX_WORKERS = min(os.cpu_count() - 1, 8)
 
 WORK_DIR = Path("/dash_data") if Path("/dash_data").is_dir() else Path("dash_data")
-DATA_DIR = WORK_DIR / "data"
+DATA_DIR = WORK_DIR / "data" 
 MISC_DIR = WORK_DIR / "misc"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,27 +31,32 @@ FILE_TIMESTAMP = {}
 # ============================================
 # 🔹 Units dictionary
 # ============================================
-sled_units = {
-    'temperature': '°C',
-    'conductivity': 'S m⁻¹',
-    'pressure': 'dbar',
-    'depth': 'm',
-    'salinity': 'psu',
-    'density': 'kg m⁻³',
-    'latitude': '°',
-    'longitude': '°',
-    'nitrate': 'µM',
-    'par': 'µmol photons m⁻² s⁻¹',
-    'chlorophyll': 'µg l⁻¹',
-    'backscattering': 'm⁻¹ sr⁻¹',
-    'oxygen_concentration': 'µM',
-    'oxygen_saturation': '%',
-    'pitch': '°',
-    'roll': '°',
-    'heading': '°',
-    'altitude': 'm',
-    'sound_velocity': 'm s⁻¹',
+unit_patterns = {
+    "°C": ["temperature","temp","t090","t190","t2","tv","_t"],
+    "S m⁻¹": ["conductivity","cond","c0","c1","mS/cm"],
+    "dbar": ["pressure","press","p_","pr","prd"],
+    "m": ["depth","dep","z","altitude","alt"],
+    "psu": ["salinity","sal","sal00","sal11","practical_salinity"],
+    "kg m⁻³": ["density","dens","sigma"],
+    "°": ["latitude","lat","longitude","lon","pitch","roll","heading"],
+    "µM": ["nitrate","no3","suna","oxygen_concentration"],
+    "µg l⁻¹": ["chlorophyll","chl","fluor","fchl","fl"],
+    "m⁻¹ sr⁻¹": ["backscattering","bb","bbp"],
+    "µmol photons m⁻² s⁻¹": ["par","irradiance","ed"],
+    "m s⁻¹": ["sound_velocity","sv","svcm"],
+    "%": ["oxygen_saturation","oxsat","o2sat"],
+    "ind m⁻³": [
+                "amphipod", "appendicularian", "chaetognath", "copepod", "ctenophore", "doliolid", "euphausids", "fish", "medusa",
+                "polychaete", "pteropod", "radiolarian", "salp", "siphonophore", "trichodesmium","veliger"
+               ],
 }
+
+def get_unit(varname):
+    vn = varname.lower()
+    for unit, pats in unit_patterns.items():
+        if any(p in vn for p in pats):
+            return unit
+    return ""
 
 # ============================================
 # 🔹 IES80 Seawater Density Function
@@ -99,72 +104,128 @@ def ies80(s, t, p=0):
 # ============================================
 # 🔹 File Utilities
 # ============================================
-def get_csv_files() -> list[str]:
-    """Return list of available CSV filenames (stem only)."""
+def scan_datasets() -> list[str]:
+    """
+    Returns a list of available dataset folders under DATA_DIR.
+    Example:
+      /dash_data/data/NESLTER_2022/...
+      returns ['NESLTER_2022']
+    """
     if not DATA_DIR.exists():
         return []
-    return sorted(f.stem for f in DATA_DIR.glob("*.csv") if f.is_file())
+    return sorted([f.name for f in DATA_DIR.iterdir() if f.is_dir()])
+
+def get_csv_files(dataset: str) -> list[str]:
+    """
+    Returns CSV stem names inside the selected dataset folder.
+    Example:
+        dataset = 'NESLTER_2022'
+        scans /dash_data/data/NESLTER_2022/*.csv
+    """
+    dataset_path = DATA_DIR / dataset
+    if not dataset_path.exists():
+        return []
+    return sorted(f.stem for f in dataset_path.glob("*.csv") if f.is_file())
 
 @lru_cache(maxsize=4)
 def load_csv(path: Path) -> pd.DataFrame | None:
     """Read a small auxiliary CSV file (stations, bathymetry)."""
     return pd.read_csv(path, dtype=str, encoding="utf-8") if path.exists() else None
 
+def dynamic_ticks(vmin, vmax, nticks=6):
+    """Return (ticks, digits) where digits = decimals needed for clean labels."""
+    span = abs(vmax - vmin)
+    if span == 0:
+        return np.array([vmin]), 2
+
+    # Step computation (dynamic, no hardcoding)
+    raw_step = span / (nticks - 1)
+    magnitude = 10 ** np.floor(np.log10(raw_step))
+    frac = raw_step / magnitude
+
+    if frac < 1.5:
+        step = 1 * magnitude
+    elif frac < 3:
+        step = 2 * magnitude
+    elif frac < 7:
+        step = 5 * magnitude
+    else:
+        step = 10 * magnitude
+
+    # Determine rounding precision
+    # Example: step = 0.1 → digits = 1 ; step = 0.01 → digits = 2
+    if step >= 1:
+        digits = 0
+    else:
+        digits = int(abs(np.floor(np.log10(step))))
+
+    # Compute ticks
+    if vmin < vmax:
+        start = np.floor(vmin / step) * step
+        end   = np.ceil(vmax / step) * step
+    else:
+        start = np.floor(vmax / step) * step
+        end   = np.ceil(vmin / step) * step
+
+    ticks = np.arange(start, end + step * 0.1, step)
+
+    return ticks, digits
+
 # ============================================
 # 🔹 Main Data Loader with Smart Caching
 # ============================================
-def load_data(file_name: str, sub_sample: int = 1) -> pd.DataFrame:
-    """Load, preprocess, and optionally sub-sample a dataset."""
-    global DATA_CACHE, CURRENT_FILE, FILE_TIMESTAMP
-    csv_path = DATA_DIR / f"{file_name}.csv"
+def load_data(dataset: str, file_name: str, sub_sample: int = 1) -> pd.DataFrame:
+    """
+    Load, clean, and optionally sub-sample a dataset.
+    - Keeps essential cleaning (datetime, numeric, coordinate limits, media columns)
+    - Adds a stable point_id if missing
+    - No overcomplicated cache or timestamp tracking
+    """
+    dataset_path = DATA_DIR / dataset
+    csv_path = dataset_path / f"{file_name}.csv"
+
     if not csv_path.exists():
         return pd.DataFrame()
 
-    mtime = csv_path.stat().st_mtime
-    # Use cache only if file unchanged
-    if (file_name == CURRENT_FILE 
-        and file_name in DATA_CACHE 
-        and FILE_TIMESTAMP.get(file_name) == mtime):
-        return DATA_CACHE[file_name].iloc[::sub_sample, :].reset_index(drop=True)
+    # --- Simple static cache ---
+    cache_key = f"{dataset}/{file_name}"
+    if cache_key in DATA_CACHE:
+        df = DATA_CACHE[cache_key]
+    else:
+        df = pd.read_csv(csv_path, low_memory=False)
 
-    # Load fresh
-    df = pd.read_csv(csv_path, low_memory=False)
+        # Stable id (only add once)
+        if "point_id" not in df.columns:
+            df["point_id"] = np.arange(len(df))
 
-    # ✅ Ensure stable, persistent point_id across reloads and callbacks
-    if "point_id" not in df.columns:
-        df["point_id"] = np.arange(len(df))
+        # Clean timestamp
+        if "times" in df.columns:
+            df["times"] = pd.to_datetime(df["times"], errors="coerce", cache=True)
 
-    FILE_TIMESTAMP[file_name] = mtime
-    CURRENT_FILE = file_name
-    DATA_CACHE.clear()
+        # Ensure required media-related columns
+        for col in [
+            "media", "frame", "media_path", "id", "link",
+            "media_2", "frame_2", "media_path_2", "id_2", "link_2"
+        ]:
+            if col not in df.columns:
+                df[col] = np.nan
 
-    # Clean and standardize
-    if "times" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["times"]):
-        df["times"] = pd.to_datetime(df["times"], errors="coerce", cache=True)
+        # Clean coordinates
+        if {"longitude", "latitude"}.issubset(df.columns):
+            df = df[
+                df["longitude"].between(-180, 180, inclusive="both") &
+                df["latitude"].between(-90, 90, inclusive="both")
+            ]
 
-    # Ensure media-related columns
-    media_cols = [
-        "media", "frame", "media_path", "id", "link",
-        "media_2", "frame_2", "media_path_2", "id_2", "link_2"
-    ]
-    for col in media_cols:
-        if col not in df.columns:
-            df[col] = np.nan
+        # Convert numeric
+        for col in ["depth", "latitude", "longitude"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Clean coordinates
-    if {"longitude", "latitude"}.issubset(df.columns):
-        df = df[
-            df["longitude"].between(-180, 180, inclusive="both") &
-            df["latitude"].between(-90, 90, inclusive="both")
-        ]
+        DATA_CACHE[cache_key] = df  # simple memory cache
 
-    # Convert numeric types
-    for col in ["depth", "latitude", "longitude"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    DATA_CACHE[file_name] = df
-    return df.iloc[::sub_sample, :].reset_index(drop=True)
+    # --- Apply sub-sampling ---
+    return df.iloc[::sub_sample, :].copy()
 
 # ============================================
 # 🔹 CLI Interface
@@ -181,8 +242,11 @@ def cli():
 # ============================================
 app = dash.Dash(__name__)
 
-csv_files = get_csv_files()
-df = load_data(csv_files[-1]) if csv_files else pd.DataFrame()
+datasets = scan_datasets()
+selected_dataset = datasets[-1] if datasets else None
+
+csv_files = get_csv_files(selected_dataset) if selected_dataset else []
+df = load_data(selected_dataset, csv_files[-1]) if csv_files else pd.DataFrame()
 
 meta_vars = [
     "timestamp", "times", "matdate",
@@ -252,9 +316,17 @@ app.layout = html.Div([
         # --- LEFT CONTROLS ---
         html.Div([
 
-            # Row 1: File + cruise axis controls
+            # Dataset selection
             html.Div([
                 html.Label('Dataset:', style={'font-size': '20px'}),
+                dcc.Dropdown(
+                    id='dataset_selector',
+                    options=[{'label': f, 'value': f} for f in datasets],
+                    value=selected_dataset,
+                    clearable=False
+                ),
+                
+                html.Label('Data file:', style={'font-size': '20px'}),
                 dcc.Dropdown(
                     id='csv_selector',
                     options=[{'label': f, 'value': f} for f in csv_files],
@@ -330,6 +402,10 @@ app.layout = html.Div([
                         options=[{'label': cmap, 'value': cmap} for cmap in colormaps],
                         value='Jet'
                     )
+                ]),
+                html.Div([
+                    html.Label('Marker size:'),
+                    dcc.Input(id='size', type='number', value=3)
                 ]),
                 html.Div([
                     html.Label('Min Depth:'),
@@ -416,6 +492,7 @@ app.layout = html.Div([
         html.Div([
             html.Div([dcc.Graph(id='cruise_track')], className='cruise-track-graph'),
             dcc.Store(id='cruise_track_selected_data'),
+            dcc.Store(id='cruise_track_selection_store', data={"selected_ids": []}),
             dcc.Store(id='main_plot_selected_data'),
             html.Div([dcc.Graph(id='main_plot')], className='main-graph'),
             html.Div([dcc.Graph(id='ts_plot')], className='ts-graph'),
@@ -521,25 +598,43 @@ def restore_from_url(search, csv_options):
 
     return results
 
+# --- Callback: Refresh available dataset list ---
+@app.callback(
+    Output("dataset_selector", "options"),
+    Input("file-scan-interval", "n_intervals"),
+)
+def refresh_dataset_list(_):
+    ds = scan_datasets()
+    return [{'label': f, 'value': f} for f in ds]
 
 # --- Callback: Refresh available CSV file list ---
 @app.callback(
     Output("csv_selector", "options"),
     Output("csv_selector", "value"),
+    Input("dataset_selector", "value"),
     Input("refresh-button", "n_clicks"),
-    prevent_initial_call=True
 )
-def update_file_list(n_clicks):
-    """Refresh the list of available CSV datasets."""
-    global DATA_CACHE, CURRENT_FILE
-    DATA_CACHE.clear()
-    CURRENT_FILE = None
+def update_csv_files(dataset, n_clicks):
 
-    files = get_csv_files()
-    options = [{'label': f, 'value': f} for f in files]
-    new_value = files[-1] if files else None
-    return options, new_value
+    # Case 1: No dataset selected → nothing to load
+    if not dataset:
+        return [], None
 
+    triggered = ctx.triggered_id  # dash context
+
+    # Case 2: Refresh button pressed → clear cache
+    if triggered == "refresh-button":
+        global DATA_CACHE, CURRENT_FILE
+        DATA_CACHE.clear()
+        CURRENT_FILE = None
+
+    # Case 3: Load CSV list for selected dataset
+    csv_files = get_csv_files(dataset)
+
+    options = [{'label': f, 'value': f} for f in csv_files]
+    value = csv_files[-1] if csv_files else None
+
+    return options, value
 
 # ============================================================
 # === Color Variable and Range Management ===
@@ -553,17 +648,18 @@ def update_file_list(n_clicks):
         Output('ts_color_variable', 'options'),
         Output('ts_color_variable', 'value'),
     ],
+    Input('dataset_selector', 'value'),
     Input('csv_selector', 'value'),
     State('color_variable', 'value'),
     State('ts_color_variable', 'value'),
     prevent_initial_call=True
 )
-def update_color_variable_options(csv_file, current_color, current_ts_color):
+def update_color_variable_options(dataset, csv_file, current_color, current_ts_color):
     """Update available sensor/color variable lists when dataset changes."""
     if not csv_file:
         return [], None, [], None
 
-    df = load_data(csv_file)
+    df = load_data(dataset, csv_file)
     sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
     color_options = [{'label': var.capitalize(), 'value': var} for var in sensor_vars]
 
@@ -603,84 +699,104 @@ def reset_ts_vmin_vmax(color_var):
 # ============================================================
 
 @app.callback(
-    Output('cruise_track', 'figure'),
-    Input('csv_selector', 'value'),
-    Input('cruise_track_xaxis', 'value'),
-    Input('cruise_track_yaxis', 'value'),
-    Input('sub_sample', 'value'),
+    Output("cruise_track", "figure"),
+    Input("dataset_selector", "value"),
+    Input("csv_selector", "value"),
+    Input("cruise_track_xaxis", "value"),
+    Input("cruise_track_yaxis", "value"),
+    State("sub_sample", "value"),
+    prevent_initial_call=True,
 )
-def draw_cruise_track(csv_file, xaxis, yaxis, sub_sample):
-    """Draw the cruise track scatter plot (latitude vs. selected X-axis)."""
+def draw_cruise_track(dataset, csv_file, xaxis, yaxis, sub_sample):
+    trigger = ctx.triggered_id
+
+    # 🧱 ignore redraws unless the trigger is one of these:
+    if trigger not in ("csv_selector", "cruise_track_xaxis", "cruise_track_yaxis"):
+        raise dash.exceptions.PreventUpdate
+
     if not csv_file:
         return px.scatter()
 
-    df = load_data(csv_file, sub_sample=sub_sample)
-    #df['point_id'] = df.index
+    df = load_data(dataset, csv_file, sub_sample=sub_sample)
 
-    # --- Base scatter plot ---
-    fig = px.scatter(df, x=xaxis, y=yaxis, custom_data=['point_id'])
+    fig = px.scatter(df, x=xaxis, y=yaxis, custom_data=["point_id"])
     fig.update_traces(
-        mode='markers',
-        selected=dict(marker=dict(color='red')),
-        unselected=dict(marker=dict(color='blue'))
+        mode="markers",
+        selected=dict(marker=dict(color="red")),
+        unselected=dict(marker=dict(color="blue"))
     )
 
-    # --- Layout setup ---
     fig.update_layout(
-        dragmode='select',
-        selectdirection='any',  # allow box/lasso in any direction
-        newselection_mode='immediate',
-        clickmode='event+select',
+        dragmode="select",
+        selectdirection="any",
+        newselection_mode="immediate",
+        clickmode="select",
+        uirevision="cruise-track",
         xaxis=dict(
             title=xaxis.capitalize(),
             rangeslider=dict(visible=False),
-            showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
-            showline=True, linecolor='black', mirror=True
+            showgrid=True, gridcolor="rgba(0,0,0,0.1)",
+            showline=True, linecolor="black", mirror=True
         ),
         yaxis=dict(
             title=yaxis.capitalize(),
             autorange=True,
             fixedrange=False,
-            showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
-            showline=True, linecolor='black', mirror=True
+            showgrid=True, gridcolor="rgba(0,0,0,0.1)",
+            showline=True, linecolor="black", mirror=True
         ),
-        paper_bgcolor='white',
-        plot_bgcolor='white'
+        paper_bgcolor="white",
+        plot_bgcolor="white"
     )
 
-    # --- Enforce equal degree scaling for lat/lon plots ---
-    if xaxis in ['longitude', 'latitude']:
+    if xaxis in ["longitude", "latitude"]:
         fig.update_layout(yaxis=dict(scaleanchor="x", scaleratio=1))
 
     return fig
-
 
 # ============================================================
 # === Selections & Range Change Tracking ===
 # ============================================================
 
-# --- Callback: Store selected point IDs from the cruise track plot ---
+# --- Callback: Manage persistent cruise track selection (in-memory only) ---
 @app.callback(
-    Output("cruise_track_selected_data", "data"),
+    Output("cruise_track_selection_store", "data"),
     Input("cruise_track", "selectedData"),
-    State("csv_selector", "value"),
-    prevent_initial_call=True
+    Input("dataset_selector", "value"),
+    Input("csv_selector", "value"),
+    State("cruise_track_selection_store", "data"),
+    prevent_initial_call=True,
 )
-def store_cruise_track_selection(selectedData, csv_file):
-    """Store selected point IDs from the cruise track plot.
-    If selection is cleared (double-click), return all points instead of empty.
+def persist_cruise_track_selection(selectedData, dataset, csv_file, prev_data):
     """
-    df = load_data(csv_file)
-    #df['point_id'] = df.index
+    Keep cruise track selection stable.
+    Only respond to explicit user selection or dataset change.
+    """
+    df = load_data(dataset, csv_file)
+    trigger = ctx.triggered_id
 
-    if not selectedData or "points" not in selectedData or not selectedData["points"]:
-        selected_ids = df["point_id"].tolist()
-    else:
+    # Dataset changed → keep previous selection if possible
+    if trigger == "csv_selector":
+        if prev_data and "selected_ids" in prev_data:
+            existing = set(prev_data["selected_ids"])
+            valid = df[df["point_id"].isin(existing)]
+            if not valid.empty:
+                return {"selected_ids": valid["point_id"].tolist()}
+        # fallback: all points selected if no previous selection
+        return {"selected_ids": df["point_id"].tolist()}
+
+    # User selected points
+    if trigger == "cruise_track" and selectedData and selectedData.get("points"):
         selected_ids = [p["customdata"][0] for p in selectedData["points"] if p.get("customdata")]
+        return {"selected_ids": selected_ids}
 
-    # Include timestamp so dependent callbacks always update
-    return {"selected_ids": selected_ids, "time": time.time()}
+    # User double-clicked (true clear)
+    if trigger == "cruise_track" and selectedData is None:
+        if prev_data and len(prev_data["selected_ids"]) < len(df):
+            return {"selected_ids": df["point_id"].tolist()}
+        raise dash.exceptions.PreventUpdate  # ignore phantom clears
 
+    raise dash.exceptions.PreventUpdate
 
 # --- Callback: Mirror selections between main scatter and time-series plots ---
 @app.callback(
@@ -773,13 +889,14 @@ def track_range_change(lat_min, lat_max, ymin, ymax,
 # @app.callback(
 #     Output('download_dataframe_csv', 'data'),
 #     Input('download-button', 'n_clicks'),
+#     State('dataset_selector', 'value'),
 #     State('csv_selector', 'value'),
 #     prevent_initial_call=True
 # )
-# def download_csv(n_clicks, csv_file):
+# def download_csv(n_clicks, dataset, csv_file):
 #     '''Download the selected CSV file.'''
 #     if ctx.triggered_id == 'download-button' and csv_file:
-#         df = load_data(csv_file)
+#         df = load_data(dataset,csv_file)
 #         return dcc.send_data_frame(df.to_csv, filename=f'{csv_file}.csv', index=False)
 #     return no_update
 
@@ -793,12 +910,14 @@ def track_range_change(lat_min, lat_max, ymin, ymax,
         Output('available-sensor-vars', 'data')
     ],
     [
+        Input('dataset_selector', 'value'),
         Input('csv_selector', 'value'),
         Input('sub_sample', 'value'),
         Input('x_axis_variable', 'value'),
         Input('y_axis_variable', 'value'),
         Input('color_variable', 'value'),
         Input('color_map', 'value'),
+        Input('size', 'value'),
         Input('v_min', 'value'),
         Input('v_max', 'value'),
         Input('z_min', 'value'),
@@ -811,28 +930,14 @@ def track_range_change(lat_min, lat_max, ymin, ymax,
         Input('bathymetry', 'value'),
         Input('station', 'value'),
         Input('user_range_change', 'data'),
-        Input("cruise_track_selected_data", "modified_timestamp"),
-    ],
-    State('cruise_track_selected_data', 'data'),
+        Input('cruise_track_selection_store', 'data'),
+    ]
 )
-def update_main_plot(csv_file, sub_sample,
-                     x_axis, y_axis, color_var, color_map, vmin, vmax,
+def update_main_plot(dataset, csv_file, sub_sample,
+                     x_axis, y_axis, color_var, color_map, size, vmin, vmax,
                      zmin, zmax, lat_min, lat_max, lon_min, lon_max,
                      hidden_opacity, bathymetry, station,
-                     user_changed_range, cruise_track_flag, cruise_track_selection):
-    """
-    Update the main scatter plot (depth vs. chosen variable or coordinate).
-
-    Triggered by:
-        - Any change in dataset, color, or axis configuration
-        - Range adjustments
-        - Cruise track selection changes (via modified_timestamp)
-
-    Notes:
-        - Cruise track selection is applied FIRST (priority filter)
-        - Automatically adapts color scale, ticks, and layout
-        - Handles empty data gracefully
-    """
+                     user_changed_range, cruise_track_selection):
 
     # --------------------------------------------------------
     # 1️⃣ Load Data
@@ -845,16 +950,14 @@ def update_main_plot(csv_file, sub_sample,
             []
         )
 
-    df = load_data(csv_file, sub_sample=sub_sample)
-    #df['point_id'] = df.index
+    df = load_data(dataset, csv_file, sub_sample=sub_sample)
     sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
 
     # --------------------------------------------------------
-    # 2️⃣ Apply Cruise Track Selection (if any)
+    # 2️⃣ Apply Cruise Track Selection
     # --------------------------------------------------------
     if cruise_track_selection and "selected_ids" in cruise_track_selection:
-        selected_ids = cruise_track_selection["selected_ids"]
-        df = df[df['point_id'].isin(selected_ids)]#.reset_index(drop=True)
+        df = df[df['point_id'].isin(cruise_track_selection["selected_ids"])]
 
     if df.empty:
         return (
@@ -895,6 +998,7 @@ def update_main_plot(csv_file, sub_sample,
     )
 
     fig.update_traces(
+        marker=dict(size=size),
         selected=dict(marker=dict(opacity=1)),
         unselected=dict(marker=dict(opacity=hidden_opacity))
     )
@@ -903,85 +1007,123 @@ def update_main_plot(csv_file, sub_sample,
     # 5️⃣ Axis Ranges & Tick Formatting
     # --------------------------------------------------------
     if x_axis == 'latitude':
-        # Latitude axis — reversed so north (max) is left
         x_range = [lat_max, lat_min] if (lat_min and lat_max) else \
                   [df['latitude'].max() + 0.1, df['latitude'].min() - 0.1]
-        xticks = np.linspace(x_range[1], x_range[0], 6)
-        xticktext = [f"{abs(v):.1f}°{'N' if v >= 0 else 'S'}" for v in xticks]
-
+        xticks, digits = dynamic_ticks(x_range[1], x_range[0], nticks=6)
+        xticktext = [
+            f"{abs(v):.{digits}f}°{'N' if v >= 0 else 'S'}"
+            for v in xticks
+        ]
     elif x_axis == 'longitude':
         x_range = [lon_min, lon_max] if (lon_min and lon_max) else \
                   [df['longitude'].min() - 0.1, df['longitude'].max() + 0.1]
-        xticks = np.linspace(x_range[0], x_range[1], 6)
-        xticktext = [f"{abs(v):.1f}°{'E' if v >= 0 else 'W'}" for v in xticks]
+        xticks, digits = dynamic_ticks(x_range[1], x_range[0], nticks=6)
+        xticktext = [
+            f"{abs(v):.{digits}f}°{'N' if v >= 0 else 'S'}"
+            for v in xticks
+        ]
 
     elif x_axis == 'times':
         x_range = [df['times'].min(), df['times'].max()]
         xticks, xticktext = None, None
-        
+
     else:
         x_range, xticks, xticktext = None, None, None
 
     if y_axis == 'depth':
-        y_range = [zmax, zmin - 10] if (zmin is not None and zmax is not None) else \
-                [df['depth'].max(), df['depth'].min() - 10]
+
+        if (zmin is not None) and (zmax is not None):
+            y_range = [zmax, zmin]      # correct depth orientation
+        else:
+            y_range = [df['depth'].max(), df['depth'].min()]
         yticks, yticktext = None, None
-        ylabel = 'Depth (m)'
-        
+        ylabel = "Depth (m)"
+
     elif y_axis == 'longitude':
         y_range = [lon_min, lon_max] if (lon_min and lon_max) else \
-            [df['longitude'].min() - 0.1, df['longitude'].max() + 0.1]
+                  [df['longitude'].min() - 0.1, df['longitude'].max() + 0.1]
         yticks = np.linspace(y_range[0], y_range[1], 6)
         yticktext = [f"{abs(v):.1f}°{'E' if v >= 0 else 'W'}" for v in yticks]
         ylabel = y_axis.capitalize()
-        
+
     else:
-        y_range, yticks, yticktext, ylabel = None, None, None, y_axis.capitalize()
+        y_range, yticks, yticktext = None, None, None
+        ylabel = y_axis.capitalize()
 
     # --------------------------------------------------------
-    # 6️⃣ Layout & Appearance
+    # 6️⃣ Global Dynamic Font Size (applies to everything)
+    # --------------------------------------------------------
+    if x_range is not None:
+        span = abs(x_range[1] - x_range[0])
+    else:
+        span = 1
+
+    base_font = max(7, min(14, 9 * (span / 1.0)))
+
+    # --------------------------------------------------------
+    # 7️⃣ Layout (with dynamic font everywhere)
     # --------------------------------------------------------
     fig.update_layout(
         dragmode="zoom",
-        uirevision=None if user_changed_range else 'keep',
-        paper_bgcolor='white',
-        plot_bgcolor='white',
-        font=dict(color='black'),
+        uirevision=None if user_changed_range else "keep",
+
+        # global font
+        font=dict(size=base_font, color="black"),
+
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+
         xaxis=dict(
             title=x_axis.capitalize(),
             range=x_range,
             tickvals=xticks,
             ticktext=xticktext,
+            tickmode='array',
+            titlefont=dict(size=base_font + 2),
+            tickfont=dict(size=base_font),
             showgrid=True, gridcolor='rgba(0,0,0,0.1)',
-            showline=True, linecolor='black', mirror=True,
-            ticks='outside', tickwidth=1, tickcolor='black',
-            rangeslider=dict(visible=False)
+            showline=True, linecolor="black", mirror=True,
+            ticks="outside", tickwidth=1, tickcolor="black",
+            rangeslider=dict(visible=False),
         ),
+
         yaxis=dict(
             title=ylabel,
             range=y_range,
             tickvals=yticks,
             ticktext=yticktext,
+            tickmode='array',
+            titlefont=dict(size=base_font + 2),
+            tickfont=dict(size=base_font),
             showgrid=True, gridcolor='rgba(0,0,0,0.1)',
-            showline=True, linecolor='black', mirror=True,
-            ticks='outside', tickwidth=1, tickcolor='black'
+            showline=True, linecolor="black", mirror=True,
+            ticks="outside", tickwidth=1, tickcolor="black",
         ),
+
         coloraxis_colorbar=dict(
             title=dict(
-                text=f'{color_var.replace("_", " ").capitalize()} '
-                     f'({sled_units.get(color_var, "")})',
-                side='bottom'
+                text=f"{color_var.replace('_', ' ').capitalize()} ({get_unit(color_var)})",
+                side="bottom",
+                font=dict(size=base_font + 1),
             ),
-            orientation='h',
-            x=0.5, xanchor='center',
-            y=-1, len=0.75, thickness=15,
-            ticks='outside',
-            ticklabelposition='outside bottom'
+            tickfont=dict(size=base_font * 0.9),
+
+            orientation="h",
+            x=0.5, xanchor="center",
+            y=0, yanchor="top",
+            ypad=80,
+
+            lenmode="fraction",
+            len=0.75,
+            thickness=15,
+
+            ticks="outside",
+            ticklabelposition="outside bottom",
         )
     )
 
     # --------------------------------------------------------
-    # 7️⃣ Optional Overlays (Bathymetry & Stations)
+    # 8️⃣ Bathymetry Overlay
     # --------------------------------------------------------
     if 'True' in bathymetry and bathy is not None and x_axis == 'latitude' and y_axis == 'depth':
         bathy_mask = (
@@ -992,34 +1134,52 @@ def update_main_plot(csv_file, sub_sample,
             go.Scatter(
                 x=bathy['latitude'][bathy_mask],
                 y=bathy['bottom_depth_meters'][bathy_mask],
-                mode='lines',
-                line=dict(color='black', width=1),
-                name='Bathymetry',
-                showlegend=False
+                mode="lines",
+                line=dict(color="black", width=1),
+                name="Bathymetry",
+                showlegend=False,
             )
         )
 
-    if 'True' in station and stations is not None and x_axis == 'latitude' and y_axis == 'depth':
+    # --------------------------------------------------------
+    # 9️⃣ Station Overlay (dynamic font + stable positioning)
+    # --------------------------------------------------------
+    if 'True' in station and stations is not None and x_axis == 'latitude' and y_axis=='depth':
+
+        station_labels = [
+            dict(
+                x=lat,
+                y=1,
+                xref="x",
+                yref="paper",
+                text=label,
+                showarrow=False,
+                font=dict(size=base_font),
+                align="center",
+                yshift=35         # pixel-stable
+            )
+            for lat, label in zip(stations['latitude'], stations['station'])
+        ]
+
+        station_lines = [
+            dict(
+                type="line",
+                x0=lat, x1=lat,
+                y0=1, y1=1.02,
+                xref="x",
+                yref="paper",
+                line=dict(color="black", width=1),
+            )
+            for lat in stations['latitude']
+        ]
+
         fig.update_layout(
-            annotations=[
-                dict(
-                    x=lat, y=1.25, xref='x', yref='paper',
-                    text=label, showarrow=False,
-                    font=dict(size=12), align='center'
-                )
-                for lat, label in zip(stations['latitude'], stations['station'])
-            ],
-            shapes=[
-                dict(
-                    type='line', x0=lat, x1=lat, y0=1, y1=1.05,
-                    xref='x', yref='paper',
-                    line=dict(color='black', width=1)
-                )
-                for lat in stations['latitude']
-            ]
+            annotations=station_labels,
+            shapes=station_lines
         )
 
     return fig, sensor_vars
+
 
 # ============================================================
 # === Time–Salinity (T–S) Diagram Update ===
@@ -1028,6 +1188,7 @@ def update_main_plot(csv_file, sub_sample,
 @app.callback(
     Output('ts_plot', 'figure'),
     [
+        Input('dataset_selector', 'value'),
         Input('csv_selector', 'value'),
         Input('sub_sample', 'value'),
         Input('ts_color_variable', 'value'),
@@ -1035,26 +1196,12 @@ def update_main_plot(csv_file, sub_sample,
         Input('ts_v_min', 'value'),
         Input('ts_v_max', 'value'),
         Input('hidden_opacity', 'value'),
-        Input("cruise_track_selected_data", "modified_timestamp"),
-    ],
-    State('cruise_track_selected_data', 'data'),
+        Input('cruise_track_selection_store', 'data'),
+    ]
 )
-def update_ts_plot(csv_file, sub_sample,
+def update_ts_plot(dataset,csv_file, sub_sample,
                    color_var, color_map, vmin, vmax,
-                   hidden_opacity, cruise_track_flag, cruise_track_selection):
-    """
-    Update the T–S (Temperature–Salinity) diagram.
-
-    Triggered by:
-        - Dataset or variable changes
-        - Subsampling or color scale updates
-        - Cruise track selection changes
-
-    Notes:
-        - Cruise track selection is always applied FIRST
-        - Shows σθ density contours (IES80)
-        - Automatically rescales color range
-    """
+                   hidden_opacity, cruise_track_selection):
 
     # --------------------------------------------------------
     # 1️⃣ Load Data
@@ -1064,16 +1211,28 @@ def update_ts_plot(csv_file, sub_sample,
             text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False
         )
 
-    df = load_data(csv_file, sub_sample=sub_sample)
-    #df['point_id'] = df.index
+    df = load_data(dataset, csv_file, sub_sample=sub_sample)
     sensor_vars = [col for col in df.columns if '_std' not in col and col not in meta_vars]
 
+    if 'temperature' not in df.columns or 'salinity' not in df.columns:
+        return go.Figure().add_annotation(
+            text="⚠️ Temperature or Salinity data missing",
+            x=0.5, y=0.5, xref="paper", yref="paper",
+            showarrow=False, font=dict(size=16, color="red")
+        )
+    
+    if color_var not in df.columns:
+        return go.Figure().add_annotation(
+            text=f"No {color_var} data available",
+            x=0.5, y=0.5, xref="paper", yref="paper",
+            showarrow=False, font=dict(size=16, color="red")
+        )
+        
     # --------------------------------------------------------
     # 2️⃣ Apply Cruise Track Selection
     # --------------------------------------------------------
     if cruise_track_selection and "selected_ids" in cruise_track_selection:
-        selected_ids = cruise_track_selection["selected_ids"]
-        df = df[df['point_id'].isin(selected_ids)]#.reset_index(drop=True)
+        df = df[df['point_id'].isin(cruise_track_selection["selected_ids"])]
 
     # --------------------------------------------------------
     # 3️⃣ Handle Empty Data
@@ -1091,7 +1250,6 @@ def update_ts_plot(csv_file, sub_sample,
     tmin, tmax = df['temperature'].quantile([0.01, 0.99]).round().astype(int)
     smin, smax = df['salinity'].quantile([0.01, 0.99]).round().astype(int)
 
-    # Add buffer for contour coverage
     tmin, tmax = tmin - 2, tmax + 2
     smin, smax = smin - 2, smax + 2
 
@@ -1100,7 +1258,7 @@ def update_ts_plot(csv_file, sub_sample,
         np.arange(smin, smax, 0.5),
         indexing='ij'
     )
-    D = ies80(S, T, 0) - 1000  # potential density anomaly (σθ)
+    D = ies80(S, T, 0) - 1000
 
     # --------------------------------------------------------
     # 5️⃣ Configure Color Range
@@ -1132,25 +1290,31 @@ def update_ts_plot(csv_file, sub_sample,
                      'times', 'latitude', 'longitude', 'link', 'link_2'] + sensor_vars
     )
 
-    # Selected vs unselected opacity
     fig.update_traces(
         selected=dict(marker=dict(opacity=1)),
         unselected=dict(marker=dict(opacity=hidden_opacity))
     )
 
     # --------------------------------------------------------
-    # 7️⃣ Overlay σθ Contours
+    # 7️⃣ Global Dynamic Font Size
+    # --------------------------------------------------------
+    # Use both T and S span for scaling
+    span = max(abs(tmax - tmin), abs(smax - smin))
+    base_font = max(7, min(14, 9 * (span / 1.0)))
+
+    # --------------------------------------------------------
+    # 8️⃣ Overlay σθ Contours
     # --------------------------------------------------------
     fig.add_trace(
         go.Contour(
             z=D,
             x=np.arange(smin, smax, 0.5),
             y=np.arange(tmin, tmax, 0.5),
-            colorscale=[[0, 'black'], [1, 'black']],  # all contours in black
+            colorscale=[[0, 'black'], [1, 'black']],
             contours=dict(
                 coloring='lines',
                 showlabels=True,
-                labelfont=dict(size=10, color='black'),
+                labelfont=dict(size=base_font - 1, color='black'),
             ),
             line=dict(color='black', width=1),
             hoverinfo='skip',
@@ -1159,39 +1323,59 @@ def update_ts_plot(csv_file, sub_sample,
     )
 
     # --------------------------------------------------------
-    # 8️⃣ Final Layout & Styling
+    # 9️⃣ Final Layout (Dynamic Text + Stable Colorbar)
     # --------------------------------------------------------
     fig.update_layout(
         dragmode="zoom",
         uirevision='keep',
+
+        # Global dynamic font
+        font=dict(size=base_font, color='black'),
+
         paper_bgcolor='white',
         plot_bgcolor='white',
-        font=dict(color='black'),
-        yaxis=dict(
-            title='Temperature (°C)',
-            range=[tmin, tmax],
-            showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
-            showline=True, linecolor='black',
-            mirror=True, ticks='outside', tickwidth=1, tickcolor='black'
-        ),
+
         xaxis=dict(
             title='Salinity (psu)',
             range=[smin, smax],
+            titlefont=dict(size=base_font + 2),
+            tickfont=dict(size=base_font),
             showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
             showline=True, linecolor='black',
-            mirror=True, ticks='outside', tickwidth=1, tickcolor='black'
+            mirror=True, ticks='outside'
         ),
+
+        yaxis=dict(
+            title='Temperature (°C)',
+            range=[tmin, tmax],
+            titlefont=dict(size=base_font + 2),
+            tickfont=dict(size=base_font),
+            showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
+            showline=True, linecolor='black',
+            mirror=True, ticks='outside'
+        ),
+
+        # ===== Stable, dynamic-width horizontal colorbar =====
         coloraxis_colorbar=dict(
             title=dict(
-                text=f'<br><br>&nbsp;{color_var.replace("_", " ").capitalize()} '
-                     f'({sled_units.get(color_var, "")})',
-                side='top'
+                text=f'{color_var.replace("_", " ").capitalize()} '
+                     f'({get_unit(color_var)})',
+                side='bottom',
+                font=dict(size=base_font + 1),
             ),
-            orientation='h',  # horizontal colorbar
-            x=0.5, xanchor='center',  # centered horizontally
-            y=1.075, len=0.75, thickness=15,
+            tickfont=dict(size=base_font * 0.9),
+
+            orientation='h',
+            x=0.5, xanchor='center',
+            y=0, yanchor='top',
+            ypad=70,              # stable fixed pixel offset down
+
+            lenmode='fraction',   # dynamic responsive width
+            len=0.75,
+            thickness=15,
+
             ticks='outside',
-            ticklabelposition="outside top"
+            ticklabelposition="outside bottom"
         ),
     )
 
@@ -1204,6 +1388,7 @@ def update_ts_plot(csv_file, sub_sample,
 @app.callback(
     Output('profile_plot', 'figure'),
     [
+        Input('dataset_selector', 'value'),
         Input('csv_selector', 'value'),
         Input('sub_sample', 'value'),
         Input('ts_color_variable', 'value'),
@@ -1212,13 +1397,12 @@ def update_ts_plot(csv_file, sub_sample,
         Input('z_min', 'value'),
         Input('z_max', 'value'),
         Input('main_plot_selected_data', 'data'),
-        Input("cruise_track_selected_data", "modified_timestamp"),
-    ],
-    State('cruise_track_selected_data', 'data'),
+        Input('cruise_track_selection_store', 'data'),
+    ]
 )
-def update_profile_plot(csv_file, sub_sample,
+def update_profile_plot(dataset, csv_file, sub_sample,
                         color_var, vmin, vmax, zmin, zmax,
-                        selected_data, cruise_track_flag, cruise_track_selection):
+                        selected_data, cruise_track_selection):
     """
     Update the vertical profile plot (Depth vs. Selected Variable).
 
@@ -1236,21 +1420,28 @@ def update_profile_plot(csv_file, sub_sample,
             text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False
         ), []
 
-    df = load_data(csv_file, sub_sample=sub_sample)
+    df = load_data(dataset, csv_file, sub_sample=sub_sample)
     #df['point_id'] = df.index
 
+    if color_var not in df.columns:
+        return go.Figure().add_annotation(
+            text=f"⚠️ No {color_var} data available",
+            x=0.5, y=0.5, xref="paper", yref="paper",
+            showarrow=False, font=dict(size=16, color="red")
+        )
+        
     # --------------------------------------------------------
     # 2️⃣ Apply Cruise Track Selection (Primary Filter)
     # --------------------------------------------------------
     if cruise_track_selection and "selected_ids" in cruise_track_selection:
         selected_ids = cruise_track_selection["selected_ids"]
-        df = df[df['point_id'].isin(selected_ids)].reset_index(drop=True)
+        df = df[df['point_id'].isin(selected_ids)]
 
     # --------------------------------------------------------
     # 3️⃣ Apply Scatter Selection (Secondary Filter)
     # --------------------------------------------------------
     if selected_data and "selected_ids" in selected_data:
-        df = df[df["point_id"].isin(selected_data["selected_ids"])].reset_index(drop=True)
+        df = df[df["point_id"].isin(selected_data["selected_ids"])]#.reset_index(drop=True)
 
     # --------------------------------------------------------
     # 4️⃣ Handle Empty Data
@@ -1315,7 +1506,7 @@ def update_profile_plot(csv_file, sub_sample,
             showlegend=False,
             hovertemplate=(
                 "<b>Depth:</b> %{y:.1f} m<br>"
-                f"<b>{color_var.capitalize()}:</b> %{{x:.2f}} {sled_units.get(color_var, '')}"
+                f"<b>{color_var.capitalize()}:</b> %{{x:.2f}} {get_unit(color_var)}"
                 "<extra></extra>"
             )
         )
@@ -1344,7 +1535,7 @@ def update_profile_plot(csv_file, sub_sample,
     )
 
     fig.update_xaxes(
-        title=f'{color_var.replace("_", " ").capitalize()} ({sled_units.get(color_var, "")})',
+        title=f'{color_var.replace("_", " ").capitalize()} ({get_unit(color_var)})',
         range=[vmin, vmax],
         showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
         showline=True, linecolor='black', linewidth=1,
@@ -1431,7 +1622,7 @@ def display_click_data(clickData, sensor_vars):
             variable_details.append(
                 html.Div([
                     html.Span(
-                        f'📈 {var.capitalize().replace("_", " ")} ({sled_units.get(var, "")}):',
+                        f'📈 {var.capitalize().replace("_", " ")} ({get_unit(var)}):',
                         style={'flex': '7', 'text-align': 'left'}
                     ),
                     html.Span(
