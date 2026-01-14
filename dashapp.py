@@ -193,7 +193,6 @@ def load_data(dataset: str, file_name: str, sub_sample: int = 1) -> pd.DataFrame
         df = DATA_CACHE[cache_key]
     else:
         df = pd.read_csv(csv_path, low_memory=False)
-
         # Stable id (only add once)
         if "point_id" not in df.columns:
             df["point_id"] = np.arange(len(df))
@@ -225,7 +224,8 @@ def load_data(dataset: str, file_name: str, sub_sample: int = 1) -> pd.DataFrame
         DATA_CACHE[cache_key] = df  # simple memory cache
 
     # --- Apply sub-sampling ---
-    return df.iloc[::sub_sample, :].copy()
+    return df.loc[df.index[::sub_sample]]
+
 
 # ============================================
 # 🔹 CLI Interface
@@ -405,7 +405,7 @@ app.layout = html.Div([
                 ]),
                 html.Div([
                     html.Label('Marker size:'),
-                    dcc.Input(id='size', type='number', value=3)
+                    dcc.Input(id='size', type='number', value=10       )
                 ]),
                 html.Div([
                     html.Label('Min Depth:'),
@@ -715,11 +715,27 @@ def draw_cruise_track(dataset, csv_file, xaxis, yaxis, sub_sample):
         raise dash.exceptions.PreventUpdate
 
     if not csv_file:
-        return px.scatter()
+        fig = go.Figure()
+        fig.add_annotation(
+            text="⚠️ No CSV found",
+            x=0.5, y=0.5,
+            xref="paper", yref="paper",
+            showarrow=False
+        )
+        return fig
 
     df = load_data(dataset, csv_file, sub_sample=sub_sample)
 
-    fig = px.scatter(df, x=xaxis, y=yaxis, custom_data=["point_id"])
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(
+        x=df[xaxis],
+        y=df[yaxis],
+        mode="markers",
+        marker=dict(size=5, color="blue"),
+        meta=df["point_id"].astype(int).tolist(),  # <-- meta always survives
+        customdata=df["point_id"].astype(int).to_numpy().reshape(-1,1)
+    ))
+
     fig.update_traces(
         mode="markers",
         selected=dict(marker=dict(color="red")),
@@ -729,7 +745,7 @@ def draw_cruise_track(dataset, csv_file, xaxis, yaxis, sub_sample):
     fig.update_layout(
         dragmode="select",
         selectdirection="any",
-        newselection_mode="immediate",
+        # newselection_mode="immediate",
         clickmode="select",
         uirevision="cruise-track",
         xaxis=dict(
@@ -774,31 +790,30 @@ def persist_cruise_track_selection(selectedData, dataset, csv_file, prev_data):
     """
     df = load_data(dataset, csv_file)
     trigger = ctx.triggered_id
-
     # Dataset changed → keep previous selection if possible
     if trigger == "csv_selector":
         if prev_data and "selected_ids" in prev_data:
             existing = set(prev_data["selected_ids"])
             valid = df[df["point_id"].isin(existing)]
             if not valid.empty:
-                return {"selected_ids": valid["point_id"].tolist()}
+                return {"selected_ids": valid["point_id"].astype(int).tolist()}
         # fallback: all points selected if no previous selection
-        return {"selected_ids": df["point_id"].tolist()}
+        return {"selected_ids": df["point_id"].astype(int).tolist()}
 
     # User selected points
     if trigger == "cruise_track" and selectedData and selectedData.get("points"):
-        selected_ids = [p["customdata"][0] for p in selectedData["points"] if p.get("customdata")]
+        selected_ids = [int(p["meta"]) for p in selectedData["points"] if p.get("meta")]
         return {"selected_ids": selected_ids}
 
     # User double-clicked (true clear)
     if trigger == "cruise_track" and selectedData is None:
         if prev_data and len(prev_data["selected_ids"]) < len(df):
-            return {"selected_ids": df["point_id"].tolist()}
+            return {"selected_ids": df["point_id"].astype(int).tolist()}
         raise dash.exceptions.PreventUpdate  # ignore phantom clears
 
     raise dash.exceptions.PreventUpdate
 
-# --- Callback: Mirror selections between main scatter and time-series plots ---
+# --- Callback: Mirror selections between main scatter and TS plots ---
 @app.callback(
     Output("main_plot", "figure", allow_duplicate=True),
     Output("ts_plot", "figure", allow_duplicate=True),
@@ -855,7 +870,7 @@ def store_scatter_selection_indices(selectedData):
     """Store IDs of selected points in main scatter plot."""
     if not selectedData or "points" not in selectedData:
         return None
-    selected_ids = [p["customdata"][0] for p in selectedData["points"]]
+    selected_ids = [int(p["customdata"][0]) for p in selectedData["points"]]
     return {"selected_ids": selected_ids}
 
 
@@ -980,22 +995,30 @@ def update_main_plot(dataset, csv_file, sub_sample,
     # --------------------------------------------------------
     # 4️⃣ Create Scatter Plot
     # --------------------------------------------------------
-    fig = px.scatter(
-        df,
-        x=x_axis,
-        y=y_axis,
-        color=color_var,
-        color_continuous_scale=color_map,
-        range_color=[vmin, vmax],
-        hover_data={
-            'depth': ':.2f',
-            'latitude': ':.2f',
-            'longitude': ':.2f',
-            color_var: ':.2f'
-        },
-        custom_data=['point_id', 'media', 'frame', 'media_2', 'frame_2',
-                     'times', 'latitude', 'longitude', 'link', 'link_2'] + sensor_vars
-    )
+
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(
+        x=df[x_axis],
+        y=df[y_axis],
+        mode="markers",
+        marker=dict(
+            size=size,
+            color=df[color_var],
+            colorscale=color_map,
+            cmin=vmin,
+            cmax=vmax,
+            coloraxis="coloraxis"
+        ),
+        customdata=df[['point_id','media','frame','media_2','frame_2',
+                    'times','latitude','longitude','link','link_2'] + list(sensor_vars)]
+                .to_numpy(),
+        hovertemplate=(
+            "Depth: %{customdata[5]:.2f}<br>"
+            "Lat: %{customdata[6]:.2f}<br>"
+            "Lon: %{customdata[7]:.2f}<br>"
+            f"{color_var}: %{{marker.color:.2f}}<extra></extra>"
+        )
+    ))
 
     fig.update_traces(
         marker=dict(size=size),
@@ -1079,7 +1102,7 @@ def update_main_plot(dataset, csv_file, sub_sample,
             tickvals=xticks,
             ticktext=xticktext,
             tickmode='array',
-            titlefont=dict(size=base_font + 2),
+            # titlefont=dict(size=base_font + 2),
             tickfont=dict(size=base_font),
             showgrid=True, gridcolor='rgba(0,0,0,0.1)',
             showline=True, linecolor="black", mirror=True,
@@ -1093,34 +1116,39 @@ def update_main_plot(dataset, csv_file, sub_sample,
             tickvals=yticks,
             ticktext=yticktext,
             tickmode='array',
-            titlefont=dict(size=base_font + 2),
+            # titlefont=dict(size=base_font + 2),
             tickfont=dict(size=base_font),
             showgrid=True, gridcolor='rgba(0,0,0,0.1)',
             showline=True, linecolor="black", mirror=True,
             ticks="outside", tickwidth=1, tickcolor="black",
         ),
 
-        coloraxis_colorbar=dict(
-            title=dict(
-                text=f"{color_var.replace('_', ' ').capitalize()} ({get_unit(color_var)})",
-                side="bottom",
-                font=dict(size=base_font + 1),
-            ),
-            tickfont=dict(size=base_font * 0.9),
+        coloraxis=dict(
+                colorbar=dict(
+                    title=dict(
+                        text=f"{color_var.replace('_', ' ').capitalize()} ({get_unit(color_var)})",
+                        side="bottom",
+                        font=dict(size=base_font + 1),
+                    ),
+                    tickfont=dict(size=base_font * 0.9),
 
-            orientation="h",
-            x=0.5, xanchor="center",
-            y=0, yanchor="top",
-            ypad=80,
+                    orientation="h",
+                    x=0.5, xanchor="center",
+                    y=0, yanchor="top",
+                    ypad=80,
 
-            lenmode="fraction",
-            len=0.75,
-            thickness=15,
+                    lenmode="fraction",
+                    len=0.75,
+                    thickness=15,
 
-            ticks="outside",
-            ticklabelposition="outside bottom",
+                    ticks="outside",
+                    ticklabelposition="outside bottom",
+                ),
+                colorscale=color_map,
+                cmin=vmin,
+                cmax=vmax,
+            )
         )
-    )
 
     # --------------------------------------------------------
     # 8️⃣ Bathymetry Overlay
@@ -1271,23 +1299,31 @@ def update_ts_plot(dataset,csv_file, sub_sample,
     # --------------------------------------------------------
     # 6️⃣ Create T–S Scatter Plot
     # --------------------------------------------------------
-    fig = px.scatter(
-        df,
-        x='salinity',
-        y='temperature',
-        color=color_var,
-        color_continuous_scale=color_map,
-        range_color=[vmin, vmax],
-        hover_data={
-            'temperature': ':.2f',
-            'salinity': ':.2f',
-            'depth': ':.2f',
-            'latitude': ':.2f',
-            'longitude': ':.2f',
-            color_var: ':.2f'
-        },
-        custom_data=['point_id', 'media', 'frame', 'media_2', 'frame_2',
-                     'times', 'latitude', 'longitude', 'link', 'link_2'] + sensor_vars
+
+    custom_cols = ['point_id','media','frame','media_2','frame_2',
+                'times','latitude','longitude','link','link_2'] + list(sensor_vars)
+
+    customdata = df[custom_cols].to_numpy()
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scattergl(
+            x=df['salinity'],
+            y=df['temperature'],
+            mode="markers",
+            marker=dict(
+                size=5,
+                color=df[color_var],
+                colorscale=color_map,
+                cmin=vmin,
+                cmax=vmax,
+            ),
+            customdata=customdata,
+            selected=dict(marker=dict(opacity=1)),
+            unselected=dict(marker=dict(opacity=hidden_opacity)),
+            hoverinfo='skip'
+        )
     )
 
     fig.update_traces(
@@ -1307,18 +1343,19 @@ def update_ts_plot(dataset,csv_file, sub_sample,
     # --------------------------------------------------------
     fig.add_trace(
         go.Contour(
-            z=D,
+            z=D,   # sigma-theta grid computed earlier
             x=np.arange(smin, smax, 0.5),
             y=np.arange(tmin, tmax, 0.5),
-            colorscale=[[0, 'black'], [1, 'black']],
+            colorscale=[[0,'black'],[1,'black']],
             contours=dict(
                 coloring='lines',
                 showlabels=True,
-                labelfont=dict(size=base_font - 1, color='black'),
+                labelfont=dict(size=base_font - 1, color='black')
             ),
             line=dict(color='black', width=1),
             hoverinfo='skip',
-            showscale=False
+            showscale=False,
+            name="σθ"
         )
     )
 
@@ -1338,7 +1375,7 @@ def update_ts_plot(dataset,csv_file, sub_sample,
         xaxis=dict(
             title='Salinity (psu)',
             range=[smin, smax],
-            titlefont=dict(size=base_font + 2),
+            # titlefont=dict(size=base_font + 2),
             tickfont=dict(size=base_font),
             showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
             showline=True, linecolor='black',
@@ -1348,7 +1385,7 @@ def update_ts_plot(dataset,csv_file, sub_sample,
         yaxis=dict(
             title='Temperature (°C)',
             range=[tmin, tmax],
-            titlefont=dict(size=base_font + 2),
+            # titlefont=dict(size=base_font + 2),
             tickfont=dict(size=base_font),
             showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
             showline=True, linecolor='black',
@@ -1692,7 +1729,7 @@ if __name__ == '__main__':
     # Command-line arguments
     args = cli()
     args.port = str(args.port)
-    app.run(host=args.host, port=args.port, processes=MAX_WORKERS, threaded=False, debug=False)
+    app.run(host=args.host, port=args.port, processes=MAX_WORKERS, threaded=False, debug=True)
 else:
     # WSGI-compatible Flask server (eg gunicorn)
     application = app.server
