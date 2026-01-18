@@ -405,7 +405,7 @@ app.layout = html.Div([
                 ]),
                 html.Div([
                     html.Label('Marker size:'),
-                    dcc.Input(id='size', type='number', value=10       )
+                    dcc.Input(id='size', type='number', value=5)
                 ]),
                 html.Div([
                     html.Label('Min Depth:'),
@@ -1010,14 +1010,15 @@ def update_main_plot(dataset, csv_file, sub_sample,
             coloraxis="coloraxis"
         ),
         customdata=df[['point_id','media','frame','media_2','frame_2',
-                    'times','latitude','longitude','link','link_2'] + list(sensor_vars)]
+                    'times','latitude','longitude','link','link_2','depth'] + list(sensor_vars)]
                 .to_numpy(),
         hovertemplate=(
-            "Depth: %{customdata[5]:.2f}<br>"
+            "Depth: %{y:.2f}<br>"
             "Lat: %{customdata[6]:.2f}<br>"
             "Lon: %{customdata[7]:.2f}<br>"
             f"{color_var}: %{{marker.color:.2f}}<extra></extra>"
-        )
+        ),
+        showlegend=False,
     ))
 
     fig.update_traces(
@@ -1318,11 +1319,17 @@ def update_ts_plot(dataset,csv_file, sub_sample,
                 colorscale=color_map,
                 cmin=vmin,
                 cmax=vmax,
+                coloraxis="coloraxis"     # <-- required
             ),
             customdata=customdata,
             selected=dict(marker=dict(opacity=1)),
             unselected=dict(marker=dict(opacity=hidden_opacity)),
-            hoverinfo='skip'
+            hovertemplate=(
+                "Depth: %{y:.2f}<br>"
+                "Lat: %{customdata[6]:.2f}<br>"
+                "Lon: %{customdata[7]:.2f}<br>"
+                f"{color_var}: %{{marker.color:.2f}}<extra></extra>"
+            ),
         )
     )
 
@@ -1393,27 +1400,31 @@ def update_ts_plot(dataset,csv_file, sub_sample,
         ),
 
         # ===== Stable, dynamic-width horizontal colorbar =====
-        coloraxis_colorbar=dict(
-            title=dict(
-                text=f'{color_var.replace("_", " ").capitalize()} '
-                     f'({get_unit(color_var)})',
-                side='bottom',
-                font=dict(size=base_font + 1),
-            ),
-            tickfont=dict(size=base_font * 0.9),
+        coloraxis=dict(
+            colorscale=color_map,
+            cmin=vmin,
+            cmax=vmax,
+            colorbar=dict(
+                title=dict(
+                    text=f'{color_var.replace("_", " ").capitalize()} ({get_unit(color_var)})',
+                    side='bottom',
+                    font=dict(size=base_font + 1),
+                ),
+                tickfont=dict(size=base_font * 0.9),
 
-            orientation='h',
-            x=0.5, xanchor='center',
-            y=0, yanchor='top',
-            ypad=70,              # stable fixed pixel offset down
+                orientation='h',
+                x=0.5, xanchor='center',
+                y=0, yanchor='top',
+                ypad=70,
 
-            lenmode='fraction',   # dynamic responsive width
-            len=0.75,
-            thickness=15,
+                lenmode='fraction',
+                len=0.75,
+                thickness=15,
 
-            ticks='outside',
-            ticklabelposition="outside bottom"
-        ),
+                ticks='outside',
+                ticklabelposition="outside bottom",
+            )
+        )
     )
 
     return fig
@@ -1429,8 +1440,8 @@ def update_ts_plot(dataset,csv_file, sub_sample,
         Input('csv_selector', 'value'),
         Input('sub_sample', 'value'),
         Input('ts_color_variable', 'value'),
-        Input('v_min', 'value'),
-        Input('v_max', 'value'),
+        Input('ts_v_min', 'value'),
+        Input('ts_v_max', 'value'),
         Input('z_min', 'value'),
         Input('z_max', 'value'),
         Input('main_plot_selected_data', 'data'),
@@ -1518,19 +1529,19 @@ def update_profile_plot(dataset, csv_file, sub_sample,
     # --------------------------------------------------------
     fig = go.Figure()
 
-    # Shaded interquartile range (IQR)
-    fig.add_trace(
-        go.Scatter(
-            x=pd.concat([main_summary['q75'], main_summary['q25'][::-1]]),
-            y=pd.concat([main_summary['depth'], main_summary['depth'][::-1]]),
-            fill='toself',
-            fillcolor='rgba(0, 0, 255, 0.25)',
-            line=dict(width=0),
-            hoverinfo='skip',
-            showlegend=False,
-            name='IQR'
-        )
-    )
+    # # Shaded interquartile range (IQR)
+    # fig.add_trace(
+    #     go.Scatter(
+    #         x=pd.concat([main_summary['q75'], main_summary['q25'][::-1]]),
+    #         y=pd.concat([main_summary['depth'], main_summary['depth'][::-1]]),
+    #         fill='toself',
+    #         fillcolor='rgba(0, 0, 255, 0.25)',
+    #         line=dict(width=0),
+    #         hoverinfo='skip',
+    #         showlegend=False,
+    #         name='IQR'
+    #     )
+    # )
 
     # Median line
     fig.add_trace(
@@ -1626,7 +1637,7 @@ def display_click_data(clickData, sensor_vars):
         longitude    = custom_data[7] if len(custom_data) > 7 and pd.notna(custom_data[7]) else None
         media_link   = custom_data[8] if len(custom_data) > 8 and pd.notna(custom_data[8]) else None
         media_link_2 = custom_data[9] if len(custom_data) > 9 and pd.notna(custom_data[9]) else None
-        depth        = point.get('y', 'N/A')
+        depth        = custom_data[10] if len(custom_data) > 10 and pd.notna(custom_data[10]) else 'N/A'
 
         # --------------------------------------------------------
         # 3️⃣ Format Core Fields
@@ -1641,6 +1652,8 @@ def display_click_data(clickData, sensor_vars):
         # --------------------------------------------------------
         variable_details = []
         for i, var in enumerate(sensor_vars or [], start=10):  # start=10: first indices reserved for metadata
+            if var == 'point_id':
+                continue  # Skip point_id
             value = custom_data[i] if i < len(custom_data) else None
 
             # Adaptive formatting
@@ -1729,7 +1742,7 @@ if __name__ == '__main__':
     # Command-line arguments
     args = cli()
     args.port = str(args.port)
-    app.run(host=args.host, port=args.port, processes=MAX_WORKERS, threaded=False, debug=True)
+    app.run(host=args.host, port=args.port, processes=MAX_WORKERS, threaded=False, debug=False)
 else:
     # WSGI-compatible Flask server (eg gunicorn)
     application = app.server

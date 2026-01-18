@@ -18,11 +18,11 @@ def cli():
     parser.add_argument('--sensor_dir', type=str, default='raw_data', help='Path to the sensor data, default is raw_data')
     parser.add_argument('--media_dir', type=str, default='media_list/ISIIS1', help='Path to the media data for ISIIS1, default is media_list/ISIIS1')
     parser.add_argument('--media_dir2', type=str, default='media_list/ISIIS2', help='Path to the media data for ISIIS2, default is media_list/ISIIS2')
-    parser.add_argument('--out_dir', type=str, default='dash_data/data', help='Path to the output directory, default is dash_data/data')
+    parser.add_argument('--out_dir', type=str, default='dash_data/data/stingray', help='Path to the output directory, default is dash_data/data')
     parser.add_argument('--bin_cols', type=str, nargs='+', default=['depth', 'times'],
                         help='Columns to bin (space-separated list, e.g., \"depth times\")')
-    parser.add_argument('--bin_steps', type=float, nargs='+', default=[1, 10e9],
-                        help='Steps to bin (space-separated list, e.g., \"1 10e9\" [1 meter, 10 seconds in nanoseconds])')
+    parser.add_argument('--bin_steps', type=float, nargs='+', default=[1, 20e9],
+                        help='Steps to bin (space-separated list, e.g., \"1 20e9\" [1 meter, 20 seconds in nanoseconds])')
     parser.add_argument('--store_merge', action='store_true', help='Whether to store merged data')
     parser.add_argument('--merged_dir', type=str, default='merged_data', help='Path to the merged data directory, default is merged_data')
     return parser.parse_args()
