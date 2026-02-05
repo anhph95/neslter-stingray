@@ -729,36 +729,238 @@ def merge_df(df1, df2, on, cols=None, direction='backward', duplicates=False):
     
     return merged_df
 
+# def bin_data(df, cols, steps):
+#     """
+#     Bin numeric or datetime columns by given step sizes.
+#     NaT values are preserved (not dropped).
+#     """
+#     df = df.copy()
 
-## Data binning
-# Function to bin data based on specified columns and steps
+#     for col, step in zip(cols, steps):
+#         if np.issubdtype(df[col].dtype, np.datetime64):
+#             # Initialize with NaT
+#             binned = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+
+#             # Only apply binning to valid datetimes
+#             valid = df[col].notna()
+#             binned.loc[valid] = pd.to_datetime(
+#                 ((df.loc[valid, col].astype("int64") + step // 2) // step) * step
+#             )
+
+#             df[f"{col}_bin"] = binned
+
+#         else:
+#             df[f"{col}_bin"] = np.floor((df[col] + step / 2) / step) * step
+
+#     return df
+
+
 import numpy as np
-import pandas as pd
 
-def bin_data(df, cols, steps):
+def bin_vectors(vectors, steps):
     """
-    Bin numeric or datetime columns by given step sizes.
-    NaT values are preserved (not dropped).
+    Bin numeric or datetime vectors by given step sizes, with simple hysteresis.
+
+    For each input vector in `vectors` and its corresponding step in `steps`:
+
+    1. We first compute a "naive" bin using standard quantization:
+           numeric:   floor((x + step/2) / step) * step
+           datetime:  round to nearest bin in ns using the same idea on int64
+
+    2. Then we apply a 1D hysteresis rule along the original element order:
+
+           - We keep track of:
+               last_raw : the last *committed* raw value
+               last_bin : the bin assigned to that committed value
+
+           - For each new sample raw[i]:
+               if |raw[i] - last_raw| < step:
+                   treat as noise  → assign bin[i] = last_bin
+               else:
+                   treat as real move → accept bin[i] as computed,
+                                        and update last_raw, last_bin
+
+       This means:
+         - Tiny fluctuations less than `step` around the last committed value
+           will NOT cause a bin change.
+         - A change of at least `step` (or more) in the raw value will create
+           a new bin.
+         - This works for any numeric vector and for datetime64 vectors (in ns).
+
+    3. NaNs / NaT:
+         - Datetime NaT values are preserved and never binned.
+         - Numeric NaNs keep their quantized value, but they do NOT update
+           hysteresis state (they are effectively skipped in the hysteresis
+           comparison).
+
+    The function returns a list of binned vectors, one per input vector.
     """
-    df = df.copy()
 
-    for col, step in zip(cols, steps):
-        if np.issubdtype(df[col].dtype, np.datetime64):
-            # Initialize with NaT
-            binned = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+    """
+    Prepare a list to collect the binned output vectors.
+    """
+    outputs = []
 
-            # Only apply binning to valid datetimes
-            valid = df[col].notna()
-            binned.loc[valid] = pd.to_datetime(
-                ((df.loc[valid, col].astype("int64") + step // 2) // step) * step
-            )
+    """
+    Loop over each input vector and its corresponding step size.
+    """
+    for vec, step in zip(vectors, steps):
 
-            df[f"{col}_bin"] = binned
+        # Convert to NumPy array (do not copy unless needed)
+        raw = np.asarray(vec)
 
+        # ------------------------------------------------------------------ #
+        # Datetime64 case
+        # ------------------------------------------------------------------ #
+        if np.issubdtype(raw.dtype, np.datetime64):
+
+            """
+            For datetime vectors:
+
+            1. Work only on valid (non-NaT) entries.
+            2. Convert datetimes to int64 nanoseconds for arithmetic.
+            3. Quantize (round) using the same midpoint rule:
+                   q = round_to_nearest_step(raw_ns, step_ns)
+            4. Apply hysteresis on the raw_ns values:
+                   compare current raw_ns to last committed raw_ns.
+            """
+
+            # Initialize output array with NaT so missing values are preserved
+            out = np.full(raw.shape, np.datetime64("NaT"), dtype="datetime64[ns]")
+
+            # Boolean mask for non-NaT values
+            valid = ~np.isnat(raw)
+
+            # Raw datetime values as int64 nanoseconds (only where valid)
+            raw_ns = raw[valid].astype("int64")
+
+            """
+            Step 1: naive binning (quantization).
+
+            We do midpoint rounding by adding step//2 before integer division:
+              - (raw_ns + step//2) // step   gives the bin index
+              - * step                      rescales to ns units
+            """
+            q_ns = ((raw_ns + step // 2) // step) * step
+
+            """
+            Step 2: hysteresis on actual sample difference.
+
+            We walk through raw_ns in original order and maintain:
+              last_raw : last committed raw ns value
+              last_bin : bin assigned at that commitment
+
+            For each index i:
+                if this is the first valid sample:
+                    commit it directly (seed hysteresis)
+                else:
+                    if |raw_ns[i] - last_raw| < step:
+                        → noise → override q_ns[i] with last_bin
+                    else:
+                        → real move → accept q_ns[i] and update last_raw, last_bin
+            """
+
+            last_raw = None
+            last_bin = None
+
+            for i in range(raw_ns.size):
+                current_raw = raw_ns[i]
+
+                if last_raw is None:
+                    # First valid sample: seed hysteresis state
+                    last_raw = current_raw
+                    last_bin = q_ns[i]
+                else:
+                    # Compare actual change in ns to step
+                    if abs(current_raw - last_raw) < step:
+                        # Too small: treat as noise, keep previous bin
+                        q_ns[i] = last_bin
+                    else:
+                        # Big enough: commit a new bin and update hysteresis state
+                        last_raw = current_raw
+                        last_bin = q_ns[i]
+
+            # Convert back to datetime64[ns] and fill the output array
+            out[valid] = q_ns.astype("datetime64[ns]")
+
+            outputs.append(out)
+
+        # ------------------------------------------------------------------ #
+        # Numeric case
+        # ------------------------------------------------------------------ #
         else:
-            df[f"{col}_bin"] = np.floor((df[col] + step / 2) / step) * step
+            """
+            For numeric vectors:
 
-    return df
+            1. We compute the naive quantized bin:
+                   q = floor((x + step/2) / step) * step
+               which is midpoint rounding to the nearest step.
+
+            2. We apply the same hysteresis idea as for datetimes, but now
+               using raw numeric values instead of ns.
+            """
+
+            raw = raw.astype(float, copy=False)
+
+            """
+            Step 1: naive numeric binning.
+
+            - Add step/2 before division to implement midpoint rounding.
+            - floor(...) then multiply by step gives the quantized bin center.
+            """
+            q = np.floor((raw + step / 2.0) / step) * step
+
+            """
+            Step 2: hysteresis on actual sample difference.
+
+            We iterate in element order and keep:
+              last_raw : last committed raw numeric value
+              last_bin : bin assigned at that commitment
+
+            For each index i:
+                - If raw[i] is NaN:
+                    * skip it for hysteresis (do not update last_raw/last_bin)
+                    * leave q[i] as is (NaN remains NaN)
+                - Else:
+                    * If this is the first non-NaN:
+                          seed hysteresis with this raw/bin.
+                    * Else:
+                          if |raw[i] - last_raw| < step:
+                              → noise → set q[i] = last_bin
+                          else:
+                              → real move → accept q[i] and update
+                                            last_raw, last_bin
+            """
+
+            last_raw = None
+            last_bin = None
+
+            for i in range(raw.size):
+                current_raw = raw[i]
+
+                # Treat NaN as a gap: do not update hysteresis state
+                if np.isnan(current_raw):
+                    continue
+
+                if last_raw is None:
+                    # First non-NaN: seed hysteresis
+                    last_raw = current_raw
+                    last_bin = q[i]
+                else:
+                    if abs(current_raw - last_raw) < step:
+                        # Small change → noise → stay in the same bin
+                        q[i] = last_bin
+                    else:
+                        # Large enough → commit new bin and update hysteresis
+                        last_raw = current_raw
+                        last_bin = q[i]
+
+            outputs.append(q)
+
+    """
+    Return the list of binned vectors, one per input vector.
+    """
+    return outputs
 
 # Function got get ranges from midpoints
 def mid2range(midpoints):
@@ -893,3 +1095,302 @@ def ies80(s, t, p=0):
         rho = r0
     
     return rho
+
+from numba import njit
+@njit
+def identify_profiles(
+    depth,
+    time_seconds,
+    bin_size=1,
+    smooth_window=7,
+    dir_window=10,
+    max_gap_sec=3600.0,
+    min_samples=10,
+    min_depth_threshold=20.0,
+    min_turn_depth=5.0,
+    min_turn_time=60.0,
+):
+    """
+    Identify CTD profiles (casts) from depth and time.
+
+    This function segments a continuous depth time series into separate
+    physical profiles (downcasts, upcasts, and separate deployments).
+
+    The algorithm is designed to be robust to:
+      - wire jitter and ship heave
+      - short winch pauses
+      - noisy depth measurements
+      - small yo-yo motion near turning points
+
+    It uses quantization + median smoothing BEFORE estimating direction,
+    then detects real turnarounds with hysteresis, and enforces hard breaks
+    on time gaps.
+
+    Parameters
+    ----------
+    depth : 1D array of float
+        Raw depth measurements (positive downward).
+    time_seconds : 1D array of float
+        Time in seconds (monotonic increasing).
+    bin_size : float
+        Depth bin size (meters) used for midpoint quantization.
+        Acts like a deadband: depth changes smaller than this are ignored.
+    smooth_window : int
+        Window size (samples) for rolling median smoothing of quantized depth.
+        Suppresses spikes and high-frequency jitter.
+    dir_window : int
+        Window size (samples) used to estimate direction of motion.
+        Larger = smoother direction but more lag near turning points.
+    max_gap_sec : float
+        Time gap (seconds) that forces a new profile (e.g., recovery/redeploy).
+    min_samples : int
+        Minimum number of unique depth bins required for a profile to be valid.
+        Short micro-profiles are treated as noise.
+    min_depth_threshold : float
+        Profiles that never get shallower than this depth are considered invalid.
+        Prevents shallow dithering near surface from becoming real profiles.
+    min_turn_depth : float
+        Minimum depth reversal (meters) required to confirm a turnaround.
+        Suppresses tiny yo-yo motion at the bottom.
+    min_turn_time : float
+        Minimum time (seconds) after the last extremum before confirming
+        a turnaround. Prevents rapid oscillations from splitting profiles.
+
+    Returns
+    -------
+    profile_out : 1D float array
+        Profile labels for each sample.
+        Labels are contiguous integers starting at 0.
+        NaN indicates samples that belong to invalid profiles with no valid
+        neighbor to merge into.
+    """
+
+    n = depth.size
+
+    # -----------------------------
+    # Step 0: Midpoint quantization (deadband / hysteresis in depth space)
+    # -----------------------------
+    # Purpose:
+    #   - Remove small-scale depth noise (wire vibration, heave, sensor noise)
+    #   - Depth changes smaller than bin_size are collapsed to the same value
+    #
+    # Effect:
+    #   - Prevents tiny fluctuations from causing direction flips later
+    #
+    depth_q = np.empty(n)
+    half_bin = bin_size / 2.0
+
+    for i in range(n):
+        d = depth[i]
+        if np.isnan(d):
+            depth_q[i] = np.nan
+        else:
+            # Midpoint rounding to nearest bin center
+            depth_q[i] = np.floor((d + half_bin) / bin_size) * bin_size
+
+    # -----------------------------
+    # Step 1: Rolling median smoothing on quantized depth
+    # -----------------------------
+    # Purpose:
+    #   - Suppress spikes and short glitches
+    #   - Remove high-frequency jitter before derivative-like operations
+    #
+    # This is intentionally done AFTER quantization, so that
+    # small bin-scale oscillations are completely flattened.
+    #
+    smooth = np.empty(n)
+    hw = smooth_window // 2
+
+    for i in range(n):
+        lo = max(0, i - hw)
+        hi = min(n, i + hw + 1)
+
+        buf = []
+        for j in range(lo, hi):
+            v = depth_q[j]
+            if not np.isnan(v):
+                buf.append(v)
+
+        if len(buf) == 0:
+            smooth[i] = np.nan
+        else:
+            buf.sort()
+            smooth[i] = buf[len(buf) // 2]
+
+    # -----------------------------
+    # Step 2: Direction estimate (upcast vs downcast)
+    # -----------------------------
+    # Purpose:
+    #   - Estimate direction of motion using a coarse centered window
+    #   - +1  = descending (increasing depth)
+    #   - -1  = ascending  (decreasing depth)
+    #
+    # dir_window controls smoothness vs lag:
+    #   - larger window = more stable, more lag near turnarounds
+    #   - smaller window = more responsive, more sensitive to noise
+    #
+    direction = np.zeros(n)
+    direction[:] = np.nan
+    half = dir_window // 2
+
+    for i in range(half, n - half):
+        prev_med = smooth[i - half]
+        next_med = smooth[i + half]
+
+        if np.isnan(prev_med) or np.isnan(next_med):
+            continue
+
+        d = next_med - prev_med
+        if d > 0:
+            direction[i] = 1
+        elif d < 0:
+            direction[i] = -1
+
+    # -----------------------------
+    # Step 3: Profile boundaries
+    #         (hard gaps + physical turnarounds)
+    # -----------------------------
+    # Two types of boundaries:
+    #   HARD boundary: time gap > max_gap_sec (new deployment)
+    #   SOFT boundary: real turnaround in depth direction
+    #
+    profile = np.zeros(n, dtype=np.int64)
+    hard_profile = np.zeros(n, dtype=np.bool_)
+
+    last_dir = 0.0
+    last_extreme_depth = smooth[0]
+    last_extreme_time = time_seconds[0]
+    last_extreme_idx = 0
+
+    for i in range(1, n):
+        # Hard boundary: physical deployment gap
+        gap = (time_seconds[i] - time_seconds[i - 1]) > max_gap_sec
+
+        if gap:
+            new_pid = profile[i - 1] + 1
+            profile[i] = new_pid
+            hard_profile[new_pid] = True
+
+            # Reset turnaround state across physical breaks
+            last_dir = 0.0
+            last_extreme_depth = smooth[i]
+            last_extreme_time = time_seconds[i]
+            last_extreme_idx = i
+            continue
+
+        # Default: inherit previous profile id
+        profile[i] = profile[i - 1]
+
+        d = direction[i]
+        if np.isnan(d) or np.isnan(smooth[i]):
+            continue
+
+        dz = smooth[i] - last_extreme_depth
+        dt = time_seconds[i] - last_extreme_time
+
+        # Initialize direction state on first valid slope
+        if last_dir == 0:
+            last_dir = d
+            last_extreme_depth = smooth[i]
+            last_extreme_time = time_seconds[i]
+            last_extreme_idx = i
+            continue
+
+        # Physical turnaround detection with hysteresis:
+        #   - direction must flip
+        #   - reversal must exceed min_turn_depth
+        #   - enough time must have passed since the last extremum
+        #
+        if d != last_dir and abs(dz) >= min_turn_depth and dt >= min_turn_time:
+            new_pid = profile[i - 1] + 1
+
+            # Retroactively split at the actual extremum
+            for k in range(last_extreme_idx + 1, i + 1):
+                profile[k] = new_pid
+
+            # Reset state for the new cast
+            last_dir = d
+            last_extreme_depth = smooth[i]
+            last_extreme_time = time_seconds[i]
+            last_extreme_idx = i
+        else:
+            # Track current extremum while moving monotonically
+            if (last_dir > 0 and smooth[i] > last_extreme_depth) or \
+               (last_dir < 0 and smooth[i] < last_extreme_depth):
+                last_extreme_depth = smooth[i]
+                last_extreme_time = time_seconds[i]
+                last_extreme_idx = i
+
+    profile_out = profile.astype(np.float64)
+
+    # -----------------------------
+    # Step 4: Validate profiles + merge tiny noise segments
+    # -----------------------------
+    # A profile is invalid if:
+    #   - it has too few unique depth bins
+    #   - OR it never reaches shallower than min_depth_threshold
+    #
+    # Invalid profiles are merged into the nearest previous valid profile,
+    # UNLESS they were created by a hard (time gap) boundary.
+    #
+    max_pid = profile[-1] + 1
+    is_valid = np.zeros(max_pid, dtype=np.bool_)
+
+    for pid in range(max_pid):
+        seen = 0
+        last = np.nan
+        min_depth = 1e20
+
+        for i in range(n):
+            if profile[i] == pid:
+                d = depth_q[i]
+                if not np.isnan(d):
+                    if d < min_depth:
+                        min_depth = d
+                    if np.isnan(last) or d != last:
+                        seen += 1
+                        last = d
+
+        is_valid[pid] = (seen >= min_samples) and (min_depth <= min_depth_threshold)
+
+    for pid in range(max_pid):
+        # Never merge across time gaps
+        if is_valid[pid] or hard_profile[pid]:
+            continue
+
+        prev_valid = -1
+        for p in range(pid - 1, -1, -1):
+            if is_valid[p]:
+                prev_valid = p
+                break
+
+        if prev_valid >= 0:
+            for i in range(n):
+                if profile[i] == pid:
+                    profile_out[i] = prev_valid
+        else:
+            for i in range(n):
+                if profile[i] == pid:
+                    profile_out[i] = np.nan
+
+    # -----------------------------
+    # Step 5: Relabel profiles contiguously
+    # -----------------------------
+    # After merging, profile ids may be non-contiguous.
+    # This remaps them to 0, 1, 2, ...
+    #
+    mapping = {}
+    new_id = 0
+
+    for i in range(n):
+        pid = profile_out[i]
+        if not np.isnan(pid) and pid not in mapping:
+            mapping[pid] = new_id
+            new_id += 1
+
+    for i in range(n):
+        pid = profile_out[i]
+        if not np.isnan(pid):
+            profile_out[i] = mapping[pid]
+
+    return profile_out

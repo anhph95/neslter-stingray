@@ -995,7 +995,7 @@ def update_main_plot(dataset, csv_file, sub_sample,
     # --------------------------------------------------------
     # 4️⃣ Create Scatter Plot
     # --------------------------------------------------------
-
+    custom_cols = ['point_id','media','frame','media_2','frame_2', 'times','latitude','longitude','link','link_2','depth'] + list(sensor_vars)
     fig = go.Figure()
     fig.add_trace(go.Scattergl(
         x=df[x_axis],
@@ -1009,9 +1009,7 @@ def update_main_plot(dataset, csv_file, sub_sample,
             cmax=vmax,
             coloraxis="coloraxis"
         ),
-        customdata=df[['point_id','media','frame','media_2','frame_2',
-                    'times','latitude','longitude','link','link_2','depth'] + list(sensor_vars)]
-                .to_numpy(),
+        customdata=df[custom_cols].to_numpy(),
         hovertemplate=(
             "Depth: %{y:.2f}<br>"
             "Lat: %{customdata[6]:.2f}<br>"
@@ -1207,8 +1205,7 @@ def update_main_plot(dataset, csv_file, sub_sample,
             shapes=station_lines
         )
 
-    return fig, sensor_vars
-
+    return fig, custom_cols
 
 # ============================================================
 # === Time–Salinity (T–S) Diagram Update ===
@@ -1325,7 +1322,7 @@ def update_ts_plot(dataset,csv_file, sub_sample,
             selected=dict(marker=dict(opacity=1)),
             unselected=dict(marker=dict(opacity=hidden_opacity)),
             hovertemplate=(
-                "Depth: %{y:.2f}<br>"
+                "Depth: %{customdata[10]:.2f} m<br>"
                 "Lat: %{customdata[6]:.2f}<br>"
                 "Lon: %{customdata[7]:.2f}<br>"
                 f"{color_var}: %{{marker.color:.2f}}<extra></extra>"
@@ -1440,142 +1437,149 @@ def update_ts_plot(dataset,csv_file, sub_sample,
         Input('csv_selector', 'value'),
         Input('sub_sample', 'value'),
         Input('ts_color_variable', 'value'),
-        Input('ts_v_min', 'value'),
-        Input('ts_v_max', 'value'),
-        Input('z_min', 'value'),
-        Input('z_max', 'value'),
         Input('main_plot_selected_data', 'data'),
         Input('cruise_track_selection_store', 'data'),
     ]
 )
 def update_profile_plot(dataset, csv_file, sub_sample,
-                        color_var, vmin, vmax, zmin, zmax,
-                        selected_data, cruise_track_selection):
+                        color_var, selected_data, cruise_track_selection):
     """
     Update the vertical profile plot (Depth vs. Selected Variable).
 
     Behavior:
         - Cruise track selection is applied FIRST (primary filter)
-        - Scatter selection refines the subset (secondary filter)
-        - Displays median ± IQR (25–75%) for binned depth values
+        - Scatter selection expands to FULL profiles (secondary filter)
+        - If 'profile' exists: plot raw profiles (each profile one color)
+        - If 'profile' does NOT exist: fallback to median profile
     """
+
+    fig = go.Figure()
 
     # --------------------------------------------------------
     # 1️⃣ Load Dataset
     # --------------------------------------------------------
     if not csv_file:
-        return go.Figure().add_annotation(
-            text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False
-        ), []
+        fig.add_annotation(text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False)
+        return fig
 
     df = load_data(dataset, csv_file, sub_sample=sub_sample)
-    #df['point_id'] = df.index
 
     if color_var not in df.columns:
-        return go.Figure().add_annotation(
+        fig.add_annotation(
             text=f"⚠️ No {color_var} data available",
             x=0.5, y=0.5, xref="paper", yref="paper",
             showarrow=False, font=dict(size=16, color="red")
         )
-        
+        return fig
+
     # --------------------------------------------------------
     # 2️⃣ Apply Cruise Track Selection (Primary Filter)
     # --------------------------------------------------------
     if cruise_track_selection and "selected_ids" in cruise_track_selection:
-        selected_ids = cruise_track_selection["selected_ids"]
-        df = df[df['point_id'].isin(selected_ids)]
+        df = df[df['point_id'].isin(cruise_track_selection["selected_ids"])]
 
     # --------------------------------------------------------
-    # 3️⃣ Apply Scatter Selection (Secondary Filter)
+    # 3️⃣ Expand scatter selection → full profiles
     # --------------------------------------------------------
-    if selected_data and "selected_ids" in selected_data:
-        df = df[df["point_id"].isin(selected_data["selected_ids"])]#.reset_index(drop=True)
+    if selected_data and "selected_ids" in selected_data and 'profile' in df.columns:
+        selected_profiles = (
+            df.loc[df["point_id"].isin(selected_data["selected_ids"]), "profile"]
+              .dropna()
+              .unique()
+        )
+        if len(selected_profiles):
+            df = df[df["profile"].isin(selected_profiles)]
 
     # --------------------------------------------------------
-    # 4️⃣ Handle Empty Data
+    # 4️⃣ Clean bad values
     # --------------------------------------------------------
+    df = df.loc[
+        np.isfinite(df.get('depth', np.nan)) &
+        np.isfinite(df.get(color_var, np.nan))
+    ]
+
     if df.empty:
-        return go.Figure().add_annotation(
+        fig.add_annotation(
             text=f"⚠️ No {color_var} data available",
             x=0.5, y=0.5, xref="paper", yref="paper",
             showarrow=False, font=dict(size=16, color="red")
         )
+        return fig
 
     # --------------------------------------------------------
-    # 5️⃣ Compute Depth-Binned Summary Statistics
+    # 5️⃣ Build Profile Plot
     # --------------------------------------------------------
-    step = 1  # 1 m depth bins
-    df['depth'] = np.floor((df['depth'] + step / 2) / step) * step
+    if 'profile' in df.columns:
+        df = df.copy()
+        df['profile'] = pd.to_numeric(df['profile'], errors='coerce').astype('Int64')
 
-    main_summary = df.groupby('depth')[color_var].agg(
-        median=lambda x: x.median(),
-        q25=lambda x: x.quantile(0.25),
-        q75=lambda x: x.quantile(0.75)
-    ).reset_index()
+        unique_profiles = sorted(df['profile'].dropna().unique())
+        palette = px.colors.qualitative.Set2
+        color_map = {p: palette[i % len(palette)] for i, p in enumerate(unique_profiles)}
 
-    # Ensure proper order for plotting
-    main_summary = main_summary.sort_values('depth', ascending=True)
+        for prof, g in df.groupby('profile'):
+            g = g.sort_values('depth')
+            color = color_map.get(prof, 'rgba(0,0,0,0.6)')
 
-    # --------------------------------------------------------
-    # 6️⃣ Determine Color Scale Range (if not provided)
-    # --------------------------------------------------------
-    if vmin is None or vmax is None:
-        q = df[color_var].quantile([0.05, 0.95])
-        vmin = q[0.05] if vmin is None else vmin
-        vmax = q[0.95] if vmax is None else vmax
+            fig.add_trace(
+                go.Scatter(
+                    x=g[color_var],
+                    y=g['depth'],
+                    mode='lines+markers',
+                    line=dict(color=color, width=2),
+                    marker=dict(size=4, color=color),
+                    name=f'Profile {int(prof)}',
+                    hovertemplate=(
+                        f"<b>Profile:</b> {int(prof)}<br>"
+                        "<b>Depth:</b> %{y:.1f} m<br>"
+                        f"<b>{color_var.replace('_',' ').capitalize()}:</b> %{{x:.2f}} {get_unit(color_var)}"
+                        "<extra></extra>"
+                    )
+                )
+            )
 
-    # --------------------------------------------------------
-    # 7️⃣ Build Profile Plot 
-    # --------------------------------------------------------
-    fig = go.Figure()
+    else:
+        step = 1
+        depth_bin = np.floor((df['depth'] + step / 2) / step) * step
 
-    # # Shaded interquartile range (IQR)
-    # fig.add_trace(
-    #     go.Scatter(
-    #         x=pd.concat([main_summary['q75'], main_summary['q25'][::-1]]),
-    #         y=pd.concat([main_summary['depth'], main_summary['depth'][::-1]]),
-    #         fill='toself',
-    #         fillcolor='rgba(0, 0, 255, 0.25)',
-    #         line=dict(width=0),
-    #         hoverinfo='skip',
-    #         showlegend=False,
-    #         name='IQR'
-    #     )
-    # )
+        main_summary = (
+            df.assign(_depth_bin=depth_bin)
+              .groupby('_depth_bin')[color_var]
+              .median()
+              .reset_index()
+              .rename(columns={'_depth_bin': 'depth'})
+              .sort_values('depth')
+        )
 
-    # Median line
-    fig.add_trace(
-        go.Scatter(
-            x=main_summary['median'],
-            y=main_summary['depth'],
-            mode='lines+markers',
-            line=dict(color='blue', width=2),
-            marker=dict(symbol='circle', size=5, color='blue'),
-            showlegend=False,
-            hovertemplate=(
-                "<b>Depth:</b> %{y:.1f} m<br>"
-                f"<b>{color_var.capitalize()}:</b> %{{x:.2f}} {get_unit(color_var)}"
-                "<extra></extra>"
+        fig.add_trace(
+            go.Scatter(
+                x=main_summary[color_var],
+                y=main_summary['depth'],
+                mode='lines+markers',
+                line=dict(color='blue', width=2),
+                marker=dict(size=5, color='blue'),
+                showlegend=False,
+                hovertemplate=(
+                    "<b>Depth:</b> %{y:.1f} m<br>"
+                    f"<b>{color_var.replace('_',' ').capitalize()}:</b> %{{x:.2f}} {get_unit(color_var)}"
+                    "<extra></extra>"
+                )
             )
         )
-    )
 
     # --------------------------------------------------------
-    # 8️⃣ Layout and Axis Formatting
+    # 6️⃣ Layout & Axes (auto reverse depth)
     # --------------------------------------------------------
     fig.update_layout(
         dragmode="zoom",
         paper_bgcolor='white',
         plot_bgcolor='white',
         font=dict(color='black'),
+        legend=dict(title="Profile")
     )
 
-    # Reverse y-axis (depth increases downward)
-    y_range = [zmax, zmin - 10] if (zmin is not None and zmax is not None) else \
-              [df['depth'].max(), df['depth'].min()]
-
     fig.update_yaxes(
-        range=y_range,
+        autorange="reversed",   # depth increases downward
         title='Depth (m)',
         showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
         showline=True, linecolor='black', linewidth=1,
@@ -1584,7 +1588,6 @@ def update_profile_plot(dataset, csv_file, sub_sample,
 
     fig.update_xaxes(
         title=f'{color_var.replace("_", " ").capitalize()} ({get_unit(color_var)})',
-        range=[vmin, vmax],
         showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
         showline=True, linecolor='black', linewidth=1,
         mirror=True, ticks='outside', tickwidth=1, tickcolor='black'
@@ -1592,79 +1595,78 @@ def update_profile_plot(dataset, csv_file, sub_sample,
 
     return fig
 
-# ============================================================
+
+# ============================================================s
 # === Display Clicked Point Details (from Main Plot) ===
 # ============================================================
 
 @app.callback(
     Output('click-output', 'children'),
     Input('main_plot', 'clickData'),
-    State('available-sensor-vars', 'data')
+    State('available-sensor-vars', 'data'),   # rename this store to custom_cols if you can
 )
-def display_click_data(clickData, sensor_vars):
+def display_click_data(clickData, custom_cols):
     """
     Display detailed information about a clicked point in the main scatter plot.
-
-    Triggered by:
-        - User click on any point in the 'main_plot'
-
-    Behavior:
-        - Extracts custom_data values attached to the point
-        - Displays all metadata (media links, position, depth, timestamp)
-        - Dynamically lists all available sensor variables with formatted values
     """
 
-    # --------------------------------------------------------
-    # 1️⃣ Handle No Click Case
-    # --------------------------------------------------------
     if not clickData or 'points' not in clickData or not clickData['points']:
         return 'Click on a point to see full details.'
 
     try:
-        # --------------------------------------------------------
-        # 2️⃣ Extract Custom Data
-        # --------------------------------------------------------
         point = clickData['points'][0]
         custom_data = point.get('customdata', [])
 
-        # Fixed indices: based on consistent custom_data structure in main_plot
-        media        = custom_data[1] if len(custom_data) > 1 and pd.notna(custom_data[1]) else 'N/A'
-        frame        = custom_data[2] if len(custom_data) > 2 and pd.notna(custom_data[2]) else 'N/A'
-        media_2      = custom_data[3] if len(custom_data) > 3 and pd.notna(custom_data[3]) else 'N/A'
-        frame_2      = custom_data[4] if len(custom_data) > 4 and pd.notna(custom_data[4]) else 'N/A'
-        raw_time     = custom_data[5] if len(custom_data) > 5 and pd.notna(custom_data[5]) else None
-        latitude     = custom_data[6] if len(custom_data) > 6 and pd.notna(custom_data[6]) else None
-        longitude    = custom_data[7] if len(custom_data) > 7 and pd.notna(custom_data[7]) else None
-        media_link   = custom_data[8] if len(custom_data) > 8 and pd.notna(custom_data[8]) else None
-        media_link_2 = custom_data[9] if len(custom_data) > 9 and pd.notna(custom_data[9]) else None
-        depth        = custom_data[10] if len(custom_data) > 10 and pd.notna(custom_data[10]) else 'N/A'
+        # Map schema name -> value (single source of truth)
+        data = dict(zip(custom_cols or [], custom_data))
 
-        # --------------------------------------------------------
-        # 3️⃣ Format Core Fields
-        # --------------------------------------------------------
+        def clean(v, default=None):
+            if v is None or (isinstance(v, float) and pd.isna(v)) or v == "":
+                return default
+            return v
+
+        media        = clean(data.get('media'), 'N/A')
+        frame        = clean(data.get('frame'), 'N/A')
+        media_2      = clean(data.get('media_2'), 'N/A')
+        frame_2      = clean(data.get('frame_2'), 'N/A')
+        raw_time     = clean(data.get('times'))
+        latitude     = clean(data.get('latitude'))
+        longitude    = clean(data.get('longitude'))
+        media_link   = clean(data.get('link'))
+        media_link_2 = clean(data.get('link_2'))
+        depth        = clean(data.get('depth'))
+
         formatted_time = (
             pd.to_datetime(raw_time).strftime('%Y-%m-%d %H:%M:%S')
-            if raw_time else 'N/A'
+            if raw_time not in [None, "", pd.NaT] else 'N/A'
         )
 
-        # --------------------------------------------------------
-        # 4️⃣ Build Dynamic Variable List
-        # --------------------------------------------------------
-        variable_details = []
-        for i, var in enumerate(sensor_vars or [], start=10):  # start=10: first indices reserved for metadata
-            if var == 'point_id':
-                continue  # Skip point_id
-            value = custom_data[i] if i < len(custom_data) else None
+        lat_display = f'{latitude:.2f}°' if isinstance(latitude, (int, float)) and pd.notna(latitude) else 'N/A'
+        lon_display = f'{longitude:.2f}°' if isinstance(longitude, (int, float)) and pd.notna(longitude) else 'N/A'
+        depth_display = f'{depth:.2f} m' if isinstance(depth, (int, float)) and pd.notna(depth) else 'N/A'
 
-            # Adaptive formatting
-            if pd.isna(value):
+        # Define which fields are metadata (exclude from sensor list)
+        META_COLS = {
+            'point_id', 'media', 'frame', 'media_2', 'frame_2',
+            'times', 'latitude', 'longitude', 'link', 'link_2', 'depth'
+        }
+
+        # Build dynamic sensor variable list from schema
+        variable_details = []
+        for var in (custom_cols or []):
+            if var in META_COLS:
+                continue
+
+            value = data.get(var)
+
+            if value is None or (isinstance(value, float) and pd.isna(value)):
                 display_value = 'N/A'
             elif isinstance(value, (int, float)):
-                if abs(value) >= 1e6:  # Very large → scientific notation
+                if abs(value) >= 1e6:
                     display_value = f'{value:.2e}'
-                elif abs(value) < 1 and value != 0:  # Small floats → 4 decimals
+                elif abs(value) < 1 and value != 0:
                     display_value = f'{value:.4f}'
-                else:  # Normal range → 2 decimals + comma separator
+                else:
                     display_value = f'{value:,.2f}'
             else:
                 display_value = str(value)
@@ -1672,7 +1674,7 @@ def display_click_data(clickData, sensor_vars):
             variable_details.append(
                 html.Div([
                     html.Span(
-                        f'📈 {var.capitalize().replace("_", " ")} ({get_unit(var)}):',
+                        f'📈 {var.replace("_", " ").capitalize()} ({get_unit(var)}):',
                         style={'flex': '7', 'text-align': 'left'}
                     ),
                     html.Span(
@@ -1683,60 +1685,44 @@ def display_click_data(clickData, sensor_vars):
                 style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'})
             )
 
-        # --------------------------------------------------------
-        # 5️⃣ Return Full Info Panel
-        # --------------------------------------------------------
         return html.Div([
-            # ISIIS 1 info
             html.Div([
-                html.Span('📽️ ISIIS 1:', style={'flex': '3', 'text-align': 'left'}),
+                html.Span('📽️ ISIIS 1:', style={'flex': '3'}),
                 html.A(media, href=media_link, target='_blank', style={'flex': '7', 'text-align': 'right'})
-            ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
+            ], style={'display': 'flex', 'justify-content': 'space-between'}),
 
-            # ISIIS 2 info
             html.Div([
-                html.Span('📽️ ISIIS 2:', style={'flex': '3', 'text-align': 'left'}),
+                html.Span('📽️ ISIIS 2:', style={'flex': '3'}),
                 html.A(media_2, href=media_link_2, target='_blank', style={'flex': '7', 'text-align': 'right'})
-            ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
+            ], style={'display': 'flex', 'justify-content': 'space-between'}),
 
-            # Time
             html.Div([
-                html.Span('⏳ Time:', style={'flex': '1', 'text-align': 'left'}),
-                html.Span(formatted_time, style={'flex': '1', 'text-align': 'right'})
-            ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
+                html.Span('⏳ Time:'),
+                html.Span(formatted_time)
+            ], style={'display': 'flex', 'justify-content': 'space-between'}),
 
-            # Latitude
             html.Div([
-                html.Span('🌍 Latitude:', style={'flex': '1', 'text-align': 'left'}),
-                html.Span(f'{latitude:.2f}°' if latitude is not None else 'N/A',
-                          style={'flex': '1', 'text-align': 'right'})
-            ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
+                html.Span('🌍 Latitude:'),
+                html.Span(lat_display)
+            ], style={'display': 'flex', 'justify-content': 'space-between'}),
 
-            # Longitude
             html.Div([
-                html.Span('🌍 Longitude:', style={'flex': '1', 'text-align': 'left'}),
-                html.Span(f'{longitude:.2f}°' if longitude is not None else 'N/A',
-                          style={'flex': '1', 'text-align': 'right'})
-            ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
+                html.Span('🌍 Longitude:'),
+                html.Span(lon_display)
+            ], style={'display': 'flex', 'justify-content': 'space-between'}),
 
-            # Depth
             html.Div([
-                html.Span('🌊 Depth:', style={'flex': '1', 'text-align': 'left'}),
-                html.Span(f'{depth:.2f} m' if depth != 'N/A' else 'N/A',
-                          style={'flex': '1', 'text-align': 'right'})
-            ], style={'display': 'flex', 'justify-content': 'space-between', 'width': '100%'}),
+                html.Span('🌊 Depth:'),
+                html.Span(depth_display)
+            ], style={'display': 'flex', 'justify-content': 'space-between'}),
 
             html.Hr(),
-
-            # Dynamic sensor variables
             *variable_details
         ])
 
-    # --------------------------------------------------------
-    # 6️⃣ Handle Any Parsing Error
-    # --------------------------------------------------------
     except Exception as e:
         return f'⚠️ Error processing click data: {str(e)}'
+
 
 if __name__ == '__main__':
     # Command-line arguments
