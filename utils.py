@@ -614,7 +614,7 @@ def read_csv_parallel(file_list, max_workers=None):
 
     # Pick sensible number of workers
     if max_workers is None:
-        max_workers = min(os.cpu_count() - 1, 1)
+        max_workers = max(os.cpu_count() - 1, 8)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         dfs = list(executor.map(safe_read_csv, file_list))

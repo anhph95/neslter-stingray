@@ -156,7 +156,7 @@ def main():
     # --------------------------------------------------
     # 9) Identify sensor vs media columns
     # --------------------------------------------------
-    sensor_cols = [c for c in sensor_df.columns if c not in ["timestamp", "matdate", "times", "depth"]]
+    sensor_cols = [c for c in sensor_df.columns if c not in ["timestamp", "matdate", "times", "depth", "latitude", "longitude"]]
     media_cols = [c for c in df.columns if c not in sensor_cols + ["group", "profile", "depth", "times"]]
 
     # --------------------------------------------------

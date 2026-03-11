@@ -1,28 +1,34 @@
-/* ===========================
-   GLOBAL LAYOUT
-   =========================== */
+/* ==========================================================
+   GLOBAL PAGE SETTINGS
+   ========================================================== */
+
+/* Base page style */
 body {
-  font-family: Arial, sans-serif;
+  font-family: Arial, sans-serif;   /* global font */
   margin: 0;
   padding: 0;
-  background-color: #fff;
-  overflow-x: hidden;
+  background-color: #fff;           /* white background */
+  overflow-x: auto;                 /* allow horizontal scroll if layout overflows */
 }
 
+/* Dash container wrapper */
 ._dash-container {
-  max-width: 99%;
+  max-width: 1400px;                /* center content with max width */
   margin: auto;
-  padding: 5px;
+  padding: 6px;
 }
 
 /* Headings */
 h1, h2, h3 {
-  color: #183554;
+  color: #183554;                   /* WHOI dark blue */
 }
 
-/* ===========================
-   FLEX LAYOUT
-   =========================== */
+
+/* ==========================================================
+   FLEX LAYOUT UTILITIES
+   ========================================================== */
+
+/* Horizontal layout */
 .flex-row {
   display: flex;
   flex-direction: row;
@@ -32,74 +38,92 @@ h1, h2, h3 {
   box-sizing: border-box;
 }
 
+/* Vertical layout */
 .flex-col {
   display: flex;
   flex-direction: column;
 }
 
-/* ===========================
-   PANELS + CARDS
-   =========================== */
-.panel,
-.card {
+
+/* ==========================================================
+   PANELS & CARDS
+   ========================================================== */
+
+/* Generic control panel */
+.panel {
   background-color: #f8f8f8;
   border-radius: 6px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
   padding: 10px;
   margin-bottom: 10px;
   box-sizing: border-box;
 }
 
+/* Information cards (right panel) */
 .card {
   background-color: #fff;
+  border-radius: 6px;
+  padding: 10px;
 }
 
-/* ===========================
-   HEADER + FOOTER
-   =========================== */
-.header-top, .header-sub, .footer {
+
+/* ==========================================================
+   HEADER + FOOTER (FULL WIDTH BARS)
+   ========================================================== */
+
+/* Shared header/footer layout */
+.header-top,
+.header-sub,
+.footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  max-width: 99%;
-  margin: auto;
-  border-radius: 5px;
+
+  width: 100vw;                     /* stretch across full browser width */
+  margin-left: calc(50% - 50vw);    /* escape Dash container centering */
+
+  padding: 6px 24px;
   box-sizing: border-box;
 }
 
+/* Top dark banner */
 .header-top {
   background-color: #183554;
-  padding: 5px 16px;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 2px 5px rgba(0,0,0,0.15);
 }
 
+/* Secondary white header */
 .header-sub {
   background-color: #fff;
-  padding: 8px 16px;
+  padding: 8px 24px;
   margin-bottom: 10px;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
 }
 
+/* Main title */
 .header-title {
   color: #183554;
-  font-size: 30px;
+  font-size: 28px;
   font-weight: bold;
   white-space: nowrap;
 }
 
+/* Footer bar */
 .footer {
   background-color: #183554;
   color: white;
-  padding: 6px 12px;
-  font-size: 14px;
-  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+  padding: 6px 24px;
+  font-size: 13px;
+  box-shadow: 0 -2px 4px rgba(0,0,0,0.1);
 }
 
-/* ===========================
+
+/* ==========================================================
    BUTTONS
-   =========================== */
+   ========================================================== */
+
 button {
-  font-size: 15px;
+  font-size: 14px;
   padding: 6px 10px;
   border: none;
   border-radius: 5px;
@@ -108,6 +132,7 @@ button {
   transition: background-color 0.2s ease;
 }
 
+/* Refresh button style */
 #refresh-button {
   background-color: #007bff;
   margin-bottom: 6px;
@@ -117,25 +142,30 @@ button {
   background-color: #0056b3;
 }
 
-/* ===========================
-   LABELS + INPUTS
-   =========================== */
+
+/* ==========================================================
+   FORM LABELS & INPUT FIELDS
+   ========================================================== */
+
+/* Section titles */
 .section-label {
   font-weight: bold;
-  font-size: 18px;
+  font-size: 16px;
   color: #183554;
   margin-bottom: 6px;
 }
 
+/* Field labels */
 label {
-  font-size: 14px;
+  font-size: 13px;
   color: #183554;
 }
 
+/* Input boxes */
 input[type="number"],
 input[type="text"],
 select {
-  font-size: 14px;
+  font-size: 13px;
   width: 100%;
   padding: 4px;
   border: 1px solid #ccc;
@@ -143,121 +173,164 @@ select {
   box-sizing: border-box;
 }
 
-/* ===========================
-   TAB STYLING (Chrome-like)
-   =========================== */
-.tab-style {
-  background-color: #e6e9ef;
-  border-top-left-radius: 10px;
-  border-top-right-radius: 10px;
-  margin-right: 5px;
-  padding: 6px 16px;
-  font-size: 14px;
-  color: #183554;
-  border: 1px solid #ccc;
-  border-bottom: none;
-  cursor: pointer;
-  transition: all 0.2s ease-in-out;
-}
 
-.tab-style:hover {
-  background-color: #d9dde3;
-}
+/* ==========================================================
+   PLOT CONTAINERS
+   ========================================================== */
 
-.tab-selected {
-  background-color: #fff;
-  border-bottom: 2px solid white;
-  font-weight: bold;
-  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
-}
-
-/* ===========================
-   GRAPHS
-   =========================== */
+/* Cruise track plot (top plot) */
 .cruise-track-graph {
   width: 100%;
-  aspect-ratio: 2.5 / 1;
-  min-height: 300px;
+  height: 320px;        /* default height */
+  margin-bottom: 12px;
 }
 
+/* Main transect plot */
 .main-graph {
   width: 100%;
-  aspect-ratio: 1.5 / 1;
-  min-height: 400px;
+  height: 520px;        /* taller main visualization */
+  margin-bottom: 12px;
 }
 
+/* T-S diagram
+   default ratio = 1 : 1.2 */
 .ts-graph {
-  width: 75%;
-  aspect-ratio: 1 / 1;
-  min-height: 200px;
+  width: 520px;
+  height: 624px;        /* 520 × 1.2 */
+  margin: 0 auto 12px;  /* center horizontally */
 }
 
+/* Profile plot
+   default ratio = 1 : 1.5 */
 .profile-graph {
-  width: 75%;
-  aspect-ratio: 3 / 4;
-  min-height: 200px;
+  width: 520px;
+  height: 780px;        /* 520 × 1.5 */
+  margin: 0 auto 12px;
 }
 
-/* ===========================
-   PANEL WIDTHS
-   =========================== */
+
+/* ==========================================================
+   PANEL WIDTH STRUCTURE
+   ========================================================== */
+
+/* Left control panel */
 .left-panel {
-  flex: 2;
-  min-width: 200px;
-  max-width: 260px;
+  flex: 0 0 240px;
+  min-width: 240px;
+  max-width: 240px;
 }
 
+/* Middle plot area */
 .middle-panel {
-  flex: 6;
-  min-width: 550px;
-  max-width: calc(100% - 440px);
+  flex: 1;
+  width: 900px;
+  min-width: 860px;
+  max-width: 1040px;
+  margin: 0 10px;
 }
 
-/* ✅ Right Panel — Wider + Smaller Text */
+/* Right info panel */
 .right-panel {
-  flex: 3.8;                /* wider */
-  min-width: 320px;
-  max-width: 480px;
-  font-size: 13px;          /* smaller text overall */
+  flex: 0 0 360px;
+  min-width: 360px;
+  max-width: 360px;
+
+  font-size: 13px;
   color: #183554;
   line-height: 1.35;
+
   padding-left: 8px;
 }
 
+/* Right panel titles */
 .right-panel .section-label {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: bold;
   margin-bottom: 4px;
 }
 
+/* Scrollable data card */
 .right-panel .card {
-  font-size: 13px;
+  font-size: 12.5px;
   padding: 6px 8px;
   background-color: #fff;
   border-radius: 5px;
+
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  max-height: 1000px;
+
+  max-height: 760px;        /* prevent panel overflow */
   overflow-y: auto;
 }
 
-/* ===========================
-   RESPONSIVE ADJUSTMENTS
-   =========================== */
+
+/* ==========================================================
+   RESPONSIVE BEHAVIOR
+   ========================================================== */
+
+/* Medium screens */
 @media (max-width: 1200px) {
+
+  ._dash-container {
+    max-width: 100%;
+  }
+
+  .middle-panel {
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+  }
+
+  .left-panel {
+    flex: 0 0 200px;
+    min-width: 200px;
+  }
+
   .right-panel {
-    flex: 3;
-    max-width: 420px;
+    flex: 0 0 300px;
+    min-width: 300px;
   }
 }
 
-@media (max-width: 992px) {
-  .header-title {
-    font-size: 26px;
+/* Small screens (stack layout) */
+@media (max-width: 900px) {
+
+  .flex-row {
+    flex-direction: column;
+  }
+
+  .left-panel,
+  .middle-panel,
+  .right-panel {
+    width: 100%;
+    max-width: 100%;
+    min-width: 100%;
+  }
+
+  .ts-graph,
+  .profile-graph {
+    max-width: 100%;
   }
 }
 
-@media (max-width: 768px) {
-  body {
-    overflow-x: auto;
-  }
+
+/* ==========================================================
+   RESIZABLE PLOT CONTAINERS
+   ========================================================== */
+
+/* Allows manual resizing with mouse drag */
+.resizable {
+  resize: both;
+  overflow: auto;
+}
+
+
+/* ==========================================================
+   PLOTLY RENDERING FIX
+   ========================================================== */
+
+/* Ensures Plotly plots always fill their container
+   after CSS resizing */
+.js-plotly-plot {
+  width: 100% !important;
+  height: 100% !important;
 }
