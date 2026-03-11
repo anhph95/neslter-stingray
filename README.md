@@ -37,54 +37,35 @@ conda activate venv
 
 ## 🚀 Usage
 
-### Merge sensor data
+### Process sensor data
 ```
-usage: data_merge.py [-h] [--path PATH] [--cal_year CAL_YEAR] --cruise CRUISE --start_date START_DATE --end_date END_DATE
+usage: time_bin.py [-h] --cruise CRUISE --start START --end END
+                   [--root ROOT] [--cal-year CAL_YEAR]
+                   [--time-bin-seconds TIME_BIN_SECONDS]
+                   [--out-dir OUT_DIR]
+                   [--media-list-dirs MEDIA_LIST_DIRS [MEDIA_LIST_DIRS ...]]
+                   [--overwrite-index]
+                   [--log-level {DEBUG,INFO,WARNING,ERROR}]
 
-Merge sensor data from multiple CSV files.
-
-options:
-  -h, --help            show this help message and exit
-  --path PATH           Path to the sensor data, default is /mnt/vast/nes-lter/Stingray/data/sensor_data
-  --cal_year CAL_YEAR   Sensor calibration year, default is 2021
-  --cruise CRUISE       Cruise ID, required, e.g. EN706
-  --start_date START_DATE
-                        Cruise start date (YYYY-MM-DD), required
-  --end_date END_DATE   Cruise end date (YYYY-MM-DD), required
-```
-
-### (Optional) Get media list and Tator link (not recommended for real-time, requires `tator`, `opencv`)
-```
-usage: media_list.py [-h] [--cruise CRUISE] [--host HOST] [--project-id PROJECT_ID] [--token TOKEN] [--media-dir MEDIA_DIR]
+Stingray CTD-binned sensor aggregation + media + casts (dashboard build)
 
 options:
   -h, --help            show this help message and exit
   --cruise CRUISE       Cruise ID, required, e.g. EN706
-  --host HOST           Tator host IP address, default is https://tator.whoi.edu
-  --project-id PROJECT_ID
-                        Project ID
-  --token TOKEN         Tator login token, string or token file
-  --media-dir MEDIA_DIR
-                        Path to the media data
-```
-
-### Bin data and compute mean, standard deviation
-```
-usage: data_bin.py [-h] --cruise CRUISE [--sensor_dir SENSOR_DIR] [--media_dir MEDIA_DIR] [--bin_cols BIN_COLS [BIN_COLS ...]] [--bin_steps BIN_STEPS [BIN_STEPS ...]]
-
-Process sensor and media data for a given cruise.
-
-options:
-  -h, --help            show this help message and exit
-  --cruise CRUISE       Cruise ID
-  --sensor_dir SENSOR_DIR
-                        Path to the sensor data
-  --media_dir MEDIA_DIR
-                        Path to the media data
-  --bin_cols BIN_COLS [BIN_COLS ...]
-                        Columns to bin (space-separated list, e.g., "matdate depth")
-  --bin_steps BIN_STEPS [BIN_STEPS ...]
-                        Steps to bin (space-separated list, e.g., "0.000347 1" [30 seconds/86400, 1 meter])
+  --start START         Cruise start date (YYYY-MM-DD), required
+  --end END             Cruise end date (YYYY-MM-DD), required
+  --root ROOT           Path to the sensor data, default is sensor_data
+  --cal-year CAL_YEAR   Sensor calibration year, default is 2021
+  --time-bin-seconds TIME_BIN_SECONDS
+                        Time bin size in seconds, default is 5
+  --out-dir OUT_DIR     Output directory for dashboard data,
+                        default is dash_data/data/stingray_timebinned/
+  --media-list-dirs MEDIA_LIST_DIRS
+                        Paths to media list directories, default is
+                        media_list/ISIIS1 media_list/ISIIS2
+  --overwrite-index     Rebuild cached sensor file indexes
+  --log-level           Logging level (DEBUG, INFO, WARNING, ERROR),
+                        default INFO
 ```
 
 ### Visualize data
