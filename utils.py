@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from scipy.io import loadmat
 import logging
+from numba import njit
 
 
 # column_mappings.py
@@ -100,14 +101,16 @@ def calibrate(sensor_type, raw_value, year=None, sign=None):
         raise ValueError(f"Unknown sensor type: {sensor_type}")
 
     sensor_info = calibration_data[sensor_type]
-    calibration_func = sensor_info["function"]
+    func = sensor_info["function"]
 
-    # Use default_year if not provided
     year = year or sensor_info.get("default_year")
     if year not in sensor_info:
         raise ValueError(f"No calibration available for {sensor_type} in year {year}")
+
     params = sensor_info[year]["params"]
-    return calibration_func(raw_value, **params)
+
+    raw = np.asarray(raw_value, dtype=np.float64)
+    return func(raw, **params)
 
 ## SUNA data processing functions
 # Function to parse MATLAB .mat file to python dictionary
@@ -124,7 +127,7 @@ def parse_mat(mat_path,name=None):
 def check_lines(file_path, initials='', out_dir='modified_CAL'):
     out_path = out_dir + '/' + os.path.basename(file_path).split('.')[0] + f'_{initials}_modified.CAL'
     if os.path.exists(out_path):
-        print("Modified CAL file already exits.") 
+        logging.info("Modified CAL file already exits.") 
         return out_path
     else:
         # Create output directory for modified CAL file
@@ -156,10 +159,10 @@ H,Pressure coef,0.0265,,,"""
                 with open(out_path, 'w') as file:
                     file.write(content)
         
-            print("Required lines not present in orginal file.")
-            print(f"Generating new CAL file as {out_path}")
+            logging.info("Required lines not present in orginal file.")
+            logging.info(f"Generating new CAL file as {out_path}")
         else:
-            print("Required lines are already present. Keeping original CAL file.")
+            logging.info("Required lines are already present. Keeping original CAL file.")
             
     return out_path
 
@@ -258,7 +261,7 @@ def parse_SOSIK_NO3cal(cal_file):
                 data_lines.append(tline[1:])
 
         if len(data_lines) == 0:
-            print(f"File exists but no data lines found for: {cal_file}")
+            logging.info(f"File exists but no data lines found for: {cal_file}")
             return cal
 
         # Convert data lines to a numpy array
@@ -272,7 +275,7 @@ def parse_SOSIK_NO3cal(cal_file):
             cal[name] = data[:, i]
 
     except FileNotFoundError:
-        print(f"Cannot find calibration file at: {cal_file}")
+        logging.info(f"Cannot find calibration file at: {cal_file}")
         return cal
 
     return cal
@@ -292,7 +295,7 @@ def calc_bofu_no3(spec, ncal, pcor_flag):
     if ncal['pixel_base'] == 0:
         d['spectra_pix_range'] += 1
         d['pix_fit_win'] += 1
-        print('Pixel registration offset by +1')
+        logging.info('Pixel registration offset by +1')
     
     DC = d['DC'] if ncal['DC_flag'] != 0 else d['SWDC']
     
@@ -306,14 +309,14 @@ def calc_bofu_no3(spec, ncal, pcor_flag):
     
     # Check data range
     if d['spectra_WL_range'][0][0] > d['WL_fit_win'][0][0]:
-        print(f"Min WL of returned spectra ({d['spectra_WL_range'][0][0]}) is greater than Min WL of fit window ({d['WL_fit_win'][0][0]}).")
+        logging.info(f"Min WL of returned spectra ({d['spectra_WL_range'][0][0]}) is greater than Min WL of fit window ({d['WL_fit_win'][0][0]}).")
         d['WL_fit_win'][0][0] = d['spectra_WL_range'][0][0]
-        print(f"Fit window adjusted [{d['WL_fit_win'][0][0]} {d['WL_fit_win'][0][1]}] & NO3 estimate will be compromised!")
+        logging.info(f"Fit window adjusted [{d['WL_fit_win'][0][0]} {d['WL_fit_win'][0][1]}] & NO3 estimate will be compromised!")
     
     if d['spectra_WL_range'][0][1] < d['WL_fit_win'][0][1]:
-        print(f"Max WL of returned spectra ({d['spectra_WL_range'][0][1]}) is less than Max WL of fit window ({d['WL_fit_win'][0][1]}).")
+        logging.info(f"Max WL of returned spectra ({d['spectra_WL_range'][0][1]}) is less than Max WL of fit window ({d['WL_fit_win'][0][1]}).")
         d['WL_fit_win'][0][1] = d['spectra_WL_range'][0][1]
-        print(f"Fit window adjusted [{d['WL_fit_win'][0][0]} {d['WL_fit_win'][0][1]}] & NO3 estimate will be compromised!")
+        logging.info(f"Fit window adjusted [{d['WL_fit_win'][0][0]} {d['WL_fit_win'][0][1]}] & NO3 estimate will be compromised!")
     
     # Get pixel fit window for SUNA floats based on WL fit range
     if np.isnan(np.sum(d['pix_fit_win'])) and 'WL_fit_win' in d:
@@ -345,7 +348,7 @@ def calc_bofu_no3(spec, ncal, pcor_flag):
     # Check for UV_INTEN_SW <= 0 and set to NaN
     if np.count_nonzero(UV_INTEN_SW <= 0):
         UV_INTEN_SW[UV_INTEN_SW <= 0] = np.nan
-        print('UV Intensities <= DC found. Setting these low intensities to NaN')
+        logging.info('UV Intensities <= DC found. Setting these low intensities to NaN')
     
     # Absorbance spectra for all samples in profile
     ABS_SW = -np.log10(UV_INTEN_SW / REF)
@@ -456,7 +459,7 @@ def calibrate_nitrate(df, CRUISE, nitrate_col='NitrateConcentration[uM]', dark_c
         cal_file = next(file for file in os.listdir(cal_dir) if CRUISE.upper() in file)
         cal_path = os.path.join(cal_dir, cal_file)
     except StopIteration:
-        print(f'No calibration file found for cruise {CRUISE}, using raw nitrate values.')
+        logging.info(f'No calibration file found for cruise {CRUISE}, using raw nitrate values.')
         df.loc[df[dark_col] == 0, nitrate_col] = np.nan
         return df[nitrate_col].to_numpy()
 
@@ -502,7 +505,7 @@ def calibrate_nitrate(df, CRUISE, nitrate_col='NitrateConcentration[uM]', dark_c
     dv_mask = out['data'][:, 1] == 0
     out['data'][dv_mask, 6] = np.nan
 
-    print(f'Calibration file found for cruise {CRUISE}, TSP correction applied.')
+    logging.info(f'Calibration file found for cruise {CRUISE}, TSP correction applied.')
     return out['data'][:, 6]
 
 # Convert GPS
@@ -520,7 +523,7 @@ def datenum(dts):
     # Function to calculate the serial date number for a single datetime object
     def date2num(dt):
         if isinstance(dt, pd.Timestamp):
-            dt = dt.to_pydatetime()
+            dt = pd.to_datetime(dt).round("us").to_pydatetime()
         elif not isinstance(dt, datetime):
             raise TypeError("Input must be a datetime object or pandas.Timestamp")
         delta = dt - base_date
@@ -577,7 +580,7 @@ def datestr(date_numbers, fmt=0, as_str=False):
 
 # Function to convert timestamp to datetime and MATLAB serial date number
 def convert_timestamp(timestamp, origin_date = datetime(1904, 1, 1)):
-    times = [origin_date + timedelta(seconds=x) for x in timestamp]
+    times = pd.to_datetime(timestamp, unit="s", origin=origin_date)
     matdate = datenum(times)
     return times, matdate
 
@@ -593,6 +596,18 @@ def rawtime2time(series):
     return pd.to_timedelta(day_fractions, unit='D').dt.components.apply(
         lambda x: f"{x['hours']:02}:{x['minutes']:02}:{x['seconds']:02}", axis=1
     )
+    
+def matdate2timestamp(matdate, origin_date=datetime(1904, 1, 1)):
+    def one(x):
+        dt = datestr(x, as_str=False)  # MATLAB datenum -> datetime
+        return (dt - origin_date).total_seconds()
+
+    if isinstance(matdate, (int, float)):
+        return one(matdate)
+    elif isinstance(matdate, (list, np.ndarray, pd.Series)):
+        return [one(x) for x in matdate]
+    else:
+        raise TypeError("Input must be scalar or array-like")
 
 ### Data processing functions
 ## New sensor data processing functions
@@ -607,9 +622,9 @@ def read_csv_parallel(file_list, max_workers=None):
 
     def safe_read_csv(file):
         try:
-            return pd.read_csv(file)
+            return pd.read_csv(file, low_memory=False)
         except Exception as e:
-            print(f"Failed to read {file}: {e}")
+            logging.info(f"Failed to read {file}: {e}")
             return pd.DataFrame()  # Empty if failed
 
     # Pick sensible number of workers
@@ -646,7 +661,7 @@ def build_file_index(dir_root):
             file_date = datetime.strptime(date_str, "%Y-%m-%d %H-%M-%S.%f")
             list_of_pairs.append((file_date, file))
         except Exception as e:
-            print(f"⚠️ Skipped {file}: {e}")
+            logging.info(f"⚠️ Skipped {file}: {e}")
 
     return list_of_pairs
 
@@ -729,33 +744,36 @@ def merge_df(df1, df2, on, cols=None, direction='backward', duplicates=False):
     
     return merged_df
 
-# def bin_data(df, cols, steps):
-#     """
-#     Bin numeric or datetime columns by given step sizes.
-#     NaT values are preserved (not dropped).
-#     """
-#     df = df.copy()
 
-#     for col, step in zip(cols, steps):
-#         if np.issubdtype(df[col].dtype, np.datetime64):
-#             # Initialize with NaT
-#             binned = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
-
-#             # Only apply binning to valid datetimes
-#             valid = df[col].notna()
-#             binned.loc[valid] = pd.to_datetime(
-#                 ((df.loc[valid, col].astype("int64") + step // 2) // step) * step
-#             )
-
-#             df[f"{col}_bin"] = binned
-
-#         else:
-#             df[f"{col}_bin"] = np.floor((df[col] + step / 2) / step) * step
-
-#     return df
-
-
+## Data binning
+# Function to bin data based on specified columns and steps
 import numpy as np
+import pandas as pd
+
+def bin_data(df, cols, steps):
+    """
+    Bin numeric or datetime columns by given step sizes.
+    NaT values are preserved (not dropped).
+    """
+    df = df.copy()
+
+    for col, step in zip(cols, steps):
+        if np.issubdtype(df[col].dtype, np.datetime64):
+            # Initialize with NaT
+            binned = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+
+            # Only apply binning to valid datetimes
+            valid = df[col].notna()
+            binned.loc[valid] = pd.to_datetime(
+                ((df.loc[valid, col].astype("int64") + step // 2) // step) * step
+            )
+
+            df[f"{col}_bin"] = binned
+
+        else:
+            df[f"{col}_bin"] = np.floor((df[col] + step / 2) / step) * step
+
+    return df
 
 def bin_vectors(vectors, steps):
     """
@@ -1002,7 +1020,7 @@ def read_file(filename, hdr = None):
         return df
     
     except Exception as e:
-        print(f"Failed to read {filename}: {e}")
+        logging.info(f"Failed to read {filename}: {e}")
         return pd.DataFrame() 
     
 ## Joe Futrelle get nearest stations
@@ -1045,56 +1063,146 @@ class StationLocator(object):
     # Usage
     # locator = StationLocator(cruise)
     # df['nearest_station'], df['station_distance'] = locator.nearest_stations(df)
+
+
     
-def ies80(s, t, p=0):
-    """
-    Computes the density of seawater using the International Equation of State (IES80).
-    
-    Parameters:
-    s : array_like
-        Salinity (PSU)
-    t : array_like
-        Temperature (°C)
-    p : array_like, optional
-        Pressure (bars), default is 0
-    
-    Returns:
-    rho : array_like
-        Density of seawater (kg/m³)
-    """
-    # Coefficients for density calculation
-    r0_coef = [999.842594, 6.793952e-2, -9.09529e-3, 1.001685e-4, -1.120083e-6,
-                6.536332e-9, 8.24493e-1, -4.0899e-3, 7.6438e-5, -8.2467e-7,
-                5.3875e-9, -5.72466e-3, 1.0227e-4, -1.6546e-6, 4.8314e-4]
-    
-    r0 = np.polyval(r0_coef[:6][::-1], t) + \
-         np.polyval(r0_coef[6:11][::-1], t) * s + \
-         np.polyval(r0_coef[11:14][::-1], t) * s**1.5 + \
-         r0_coef[14] * s**2
-    
-    if np.any(p):
-        # Coefficients for compressibility
-        K_coef = [19652.21, 148.4206, -2.327105, 1.360447e-2, -5.155288e-5, 3.239908,
-                  1.43713e-3, 1.16092e-4, -5.77905e-7, 8.50935e-5,
-                  -6.12293e-6, 5.2787e-8, 54.6746, -0.603459, 1.09987e-2,
-                  -6.1670e-5, 7.944e-2, 1.6483e-2, -5.3009e-4, 2.2838e-3,
-                  -1.0981e-5, -1.6078e-6, 1.91075e-4, -9.9348e-7,
-                  2.0816e-8, 9.1697e-10]
-        
-        K = np.polyval(K_coef[:5][::-1], t) + \
-            np.polyval(K_coef[5:9][::-1], t) * p + \
-            np.polyval(K_coef[9:12][::-1], t) * p**2 + \
-            np.polyval(K_coef[12:16][::-1], t) * s + \
-            np.polyval(K_coef[16:19][::-1], t) * s**1.5 + \
-            np.polyval(K_coef[19:22][::-1], t) * p * s + \
-            K_coef[22] * p * s**1.5 + \
-            np.polyval(K_coef[23:26][::-1], t) * p**2 * s
-        
-        rho = r0 / (1 - p / K)
-    else:
-        rho = r0
-    
+from numba import njit
+import numpy as np
+@njit
+def ies80(s, t, p):
+    n = s.shape[0]
+    rho = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        si = s[i]
+        ti = t[i]
+        pi = p[i]
+        # r0 coefficients
+        r0 = (
+            999.842594
+            + 6.793952e-2 * ti
+            - 9.09529e-3 * ti**2
+            + 1.001685e-4 * ti**3
+            - 1.120083e-6 * ti**4
+            + 6.536332e-9 * ti**5
+            + (8.24493e-1 - 4.0899e-3 * ti + 7.6438e-5 * ti**2 - 8.2467e-7 * ti**3 + 5.3875e-9 * ti**4) * si
+            + (-5.72466e-3 + 1.0227e-4 * ti - 1.6546e-6 * ti**2) * si**1.5
+            + 4.8314e-4 * si**2
+        )
+        if pi != 0.0:
+            K = (
+                19652.21
+                + 148.4206 * ti
+                - 2.327105 * ti**2
+                + 1.360447e-2 * ti**3
+                - 5.155288e-5 * ti**4
+                + (3.239908 + 1.43713e-3 * ti + 1.16092e-4 * ti**2 - 5.77905e-7 * ti**3) * pi
+                + (8.50935e-5 - 6.12293e-6 * ti + 5.2787e-8 * ti**2) * pi**2
+                + (54.6746 - 0.603459 * ti + 1.09987e-2 * ti**2 - 6.1670e-5 * ti**3) * si
+                + (7.944e-2 + 1.6483e-2 * ti - 5.3009e-4 * ti**2) * si**1.5
+                + (2.2838e-3 - 1.0981e-5 * ti - 1.6078e-6 * ti**2) * pi * si
+                + 1.91075e-4 * pi * si**1.5
+                + (9.9348e-7 + 2.0816e-8 * ti + 9.1697e-10 * ti**2) * pi**2 * si
+            )
+            rho[i] = r0 / (1.0 - pi / K)
+        else:
+            rho[i] = r0
     return rho
+
+# utils_logging.py (or put in utils.py)
+
+
+### Data merge utils
+import os, sys, logging
+from datetime import datetime
+
+def setup_logging(log_dir="logs", name=None, level=logging.INFO):
+    """
+    Universal logging setup:
+
+      - logs/<script>_<timestamp>.out.log  (INFO+)
+      - logs/<script>_<timestamp>.err.log  (ERROR+)
+      - console output (INFO+)
+
+    Log format:
+      INFO | message
+    """
+    os.makedirs(log_dir, exist_ok=True)
+
+    logger = logging.getLogger(name)  # root if name=None
+    logger.setLevel(level)
+
+    fmt = logging.Formatter("%(levelname)s | %(message)s")
+
+    # Prevent duplicate handlers if called multiple times in same process
+    if logger.handlers:
+        return logger
+
+    script = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    stdout_path = os.path.join(log_dir, f"{script}_{ts}.out.log")
+    stderr_path = os.path.join(log_dir, f"{script}_{ts}.err.log")
+
+    stdout_handler = logging.FileHandler(stdout_path)
+    stdout_handler.setLevel(logging.INFO)
+    stdout_handler.setFormatter(fmt)
+
+    stderr_handler = logging.FileHandler(stderr_path)
+    stderr_handler.setLevel(logging.ERROR)
+    stderr_handler.setFormatter(fmt)
+
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.INFO)
+    console.setFormatter(fmt)
+
+    logger.addHandler(stdout_handler)
+    logger.addHandler(stderr_handler)
+    logger.addHandler(console)
+
+    logger.info(f"Logging to: {stdout_path}")
+    logger.info(f"Errors to: {stderr_path}")
+
+    return logger
+
+# =========================
+# NUMBA: TIME BINNING
+# =========================
+@njit
+def assign_time_bins(timestamps, bin_width, grid_start, grid_end):
+    n = timestamps.shape[0]
+    out = np.empty(n, dtype=np.float64)
+    n_bins = int(np.ceil((grid_end - grid_start) / bin_width))
+
+    for i in range(n):
+        ti = timestamps[i]
+        if not np.isfinite(ti):
+            out[i] = np.nan
+            continue
+
+        idx = int(np.floor((ti - grid_start) / bin_width))
+        if idx < 0 or idx >= n_bins:
+            out[i] = np.nan
+        else:
+            out[i] = grid_start + idx * bin_width
+
+    return out
+
+
+def add_time_bin(df, ts_col, grid_start, grid_end, bin_width):
+    if df.empty:
+        return df
+    df = df.copy()
+    ts = np.asarray(df[ts_col], dtype=np.float64)
+    df["time_bin"] = assign_time_bins(ts, bin_width, grid_start, grid_end)
+    return df
+
+
+def warn_unmatched(name, df):
+    if df.empty:
+        return
+    n_bad = np.isnan(df["time_bin"]).sum()
+    if n_bad > 0:
+        logging.error(f"{name}: {n_bad} rows FAILED to map to CTD time bins")
 
 from numba import njit
 @njit
