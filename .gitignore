@@ -11,10 +11,18 @@
 !dash_data/
 !dash_data/misc/
 
+# ======================
 # Allow contents of those dirs
+# ======================
 !src/**
 !assets/**
 !dash_data/misc/**
+
+# ======================
+# Exclude build artifacts inside src
+# ======================
+src/*.egg-info/
+src/**/*.egg-info/
 
 # ======================
 # Allow important root files
