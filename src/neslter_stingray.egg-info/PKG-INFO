@@ -1,0 +1,214 @@
+Metadata-Version: 2.4
+Name: neslter-stingray
+Version: 0.1.0
+Summary: NES-LTER Stingray data processing and visualization
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy==2.1.2
+Requires-Dist: pandas==2.2.3
+Requires-Dist: matplotlib==3.9.2
+Requires-Dist: scipy==1.14.1
+Requires-Dist: plotly==5.24.1
+Requires-Dist: dash==3.2.0
+Requires-Dist: flask==3.0.3
+Requires-Dist: werkzeug==3.0.6
+Requires-Dist: jinja2==3.1.4
+Requires-Dist: numba==0.63.1
+Requires-Dist: PyYAML==6.0.2
+Requires-Dist: tqdm==4.64.1
+Provides-Extra: dev
+Requires-Dist: jupyter==1.0.0; extra == "dev"
+Requires-Dist: ipykernel==6.29.5; extra == "dev"
+Requires-Dist: pytest; extra == "dev"
+Provides-Extra: shadowgraph
+Requires-Dist: opencv-python; extra == "shadowgraph"
+Requires-Dist: tator; extra == "shadowgraph"
+Provides-Extra: all
+Requires-Dist: jupyter==1.0.0; extra == "all"
+Requires-Dist: ipykernel==6.29.5; extra == "all"
+Requires-Dist: pytest; extra == "all"
+Requires-Dist: opencv-python; extra == "all"
+Requires-Dist: tator; extra == "all"
+Dynamic: license-file
+
+# NES-LTER Stingray
+
+## 📌 Overview
+This repository contains code and data processing scripts for the In-situ Ichthyoplankton Imaging System (ISIIS), also known as **Stingray**.
+
+[![DOI](https://zenodo.org/badge/946902610.svg)](https://doi.org/10.5281/zenodo.15025961)
+
+---
+
+## 📦 Installation
+
+### Clone this repository
+```bash
+git clone https://github.com/anhph95/nes-lter-stingray.git
+cd nes-lter-stingray
+```
+
+### Create Python virtual environment (venv):
+```bash
+sudo apt update
+sudo apt install python3-venv -y
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Or create Conda environment:
+```bash
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
+source ~/.bashrc
+conda env create -f environment.yml
+conda activate venv
+```
+
+---
+
+## 🚀 Usage
+
+### Process sensor data
+```
+usage: time_bin.py [-h] --cruise CRUISE --start START --end END
+                   [--root ROOT] [--cal-year CAL_YEAR]
+                   [--time-bin-seconds TIME_BIN_SECONDS]
+                   [--out-dir OUT_DIR]
+                   [--media-list-dirs MEDIA_LIST_DIRS [MEDIA_LIST_DIRS ...]]
+                   [--overwrite-index]
+                   [--log-level {DEBUG,INFO,WARNING,ERROR}]
+
+Stingray CTD-binned sensor aggregation + media + casts (dashboard build)
+
+options:
+  -h, --help            show this help message and exit
+  --cruise CRUISE       Cruise ID, required, e.g. EN706
+  --start START         Cruise start date (YYYY-MM-DD), required
+  --end END             Cruise end date (YYYY-MM-DD), required
+  --root ROOT           Path to the sensor data, default is sensor_data
+  --cal-year CAL_YEAR   Sensor calibration year, default is 2021
+  --time-bin-seconds TIME_BIN_SECONDS
+                        Time bin size in seconds, default is 5
+  --out-dir OUT_DIR     Output directory for dashboard data,
+                        default is dash_data/data/stingray_timebinned/
+  --media-list-dirs MEDIA_LIST_DIRS
+                        Paths to media list directories, default is
+                        media_list/ISIIS1 media_list/ISIIS2
+  --overwrite-index     Rebuild cached sensor file indexes
+  --log-level           Logging level (DEBUG, INFO, WARNING, ERROR),
+                        default INFO
+```
+
+### Visualize data
+Data from `dash_data/data` can be copied into:
+```
+\\vast.whoi.edu\proj\nes-lter\stingray_dashboard\dash_data\data
+```
+
+The dashboard can then be accessed via:  
+👉 [https://stingraydash.whoi.edu/](https://stingraydash.whoi.edu/)
+
+---
+
+### OR run the visualization app locally (requires `plotly`, `dash`)
+```
+usage: dashapp.py [-h] [--host HOST] [--port PORT]
+
+Stingray Dashboard
+
+options:
+  -h, --help   show this help message and exit
+  --host HOST  Host IP address for the Dash app, default is 0.0.0.0
+  --port PORT  Port number for the Dash app, default is 8050
+```
+
+---
+
+## 🐳 Running via Docker
+
+The recommended way to run the Stingray Dashboard is with **Docker Compose**.
+
+### 🛠 Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) installed  
+- [Docker Compose](https://docs.docker.com/compose/) (bundled with Docker Desktop on most systems)  
+
+---
+
+### 1. Start the app (build if first time or code changed)
+```bash
+docker compose up --build
+```
+
+This will:
+- Build the Docker image (if not already built or if code changed)  
+- Mount the `dash_data/` folder so new data is available without rebuilding  
+- Run the dashboard on [http://localhost:8050](http://localhost:8050)  
+
+---
+
+### 2. Stop the app
+```bash
+docker compose down
+```
+
+This stops and removes the running container(s).
+
+---
+
+### 3. Start in background (detached mode)
+```bash
+docker compose up -d
+```
+
+The dashboard will run in the background.  
+Stop it anytime with:
+```bash
+docker compose down
+```
+
+---
+
+### 4. Update data
+Because `dash_data/` is mounted as a bind volume, any changes to CSVs or input files in `dash_data/` on your machine are immediately reflected inside the container.  
+
+👉 **No rebuild is required** when updating data.
+
+---
+
+### 5. Rebuild when code changes
+You only need to rebuild the image if you:
+- Modify `dashapp.py`  
+- Change code in the `assets/` folder  
+- Update `requirements.txt`  
+
+Rebuild with:
+```bash
+docker compose up --build
+```
+
+---
+
+### 6. Access the dashboard
+After startup, visit in your browser:  
+👉 [http://localhost:8050](http://localhost:8050)  
+
+Or, from another computer on the same network (LAN):  
+👉 `http://<your-computer-ip>:8050`  
+
+---
+
+## 📚 License
+This project is licensed under the **MIT License**. See the LICENSE file for details.
+
+---
+
+## ✨ Contributors
+- **Anh Pham**  
+- **Sidney Batchelder**  
+- **Heidi Sosik**  
+
+---
+🔗 **GitHub Repository:** [https://github.com/anhph95/nes-lter-stingray](https://github.com/anhph95/nes-lter-stingray)  

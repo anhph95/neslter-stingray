@@ -1,0 +1,16 @@
+LICENSE
+README.md
+pyproject.toml
+src/neslter_stingray.egg-info/PKG-INFO
+src/neslter_stingray.egg-info/SOURCES.txt
+src/neslter_stingray.egg-info/dependency_links.txt
+src/neslter_stingray.egg-info/requires.txt
+src/neslter_stingray.egg-info/top_level.txt
+src/stingray/__init__.py
+src/stingray/time_bin.py
+src/stingray/utils.py
+src/stingray/image_analysis/__init__.py
+src/stingray/image_analysis/abundance.py
+src/stingray/image_analysis/frame_timestamp.py
+src/stingray/image_analysis/generate_training.py
+src/stingray/image_analysis/get_tator_link.py

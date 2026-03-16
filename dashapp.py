@@ -16,7 +16,7 @@ from plotly.colors import sample_colorscale
 # ============================================
 DEFAULT_SUBSAMPLE = 3
 DEFAULT_MAX_TIME_GAP_SEC = 300  # 5 minutes; tune per platform
-MAX_WORKERS = min(os.cpu_count() - 1, 8)
+MAX_WORKERS = max(1, min(os.cpu_count() - 1, 8))
 
 WORK_DIR = Path("/dash_data") if Path("/dash_data").is_dir() else Path("dash_data")
 DATA_DIR = WORK_DIR / "data" 
@@ -27,10 +27,7 @@ MISC_DIR.mkdir(parents=True, exist_ok=True)
 
 # Cache structures
 DATA_CACHE = {}
-CURRENT_FILE = None
-FILE_TIMESTAMP = {}
 CSV_HEADER_CACHE = {}
-TS_CONTOUR_CACHE = {}
 SENSOR_VAR_CACHE = {}
 MAX_DATA_CACHE = 8
 AVERAGE_CACHE = {}
@@ -173,6 +170,32 @@ def dynamic_ticks(vmin, vmax, nticks=6):
 # ============================================
 # 🔹 Main Data Loader with Smart Caching
 # ============================================
+def canonicalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    df = df.copy()
+    cols = {c.lower(): c for c in df.columns}
+    aliases = {
+        "latitude": ["latitude", "lat"],
+        "longitude": ["longitude", "lon"],
+        "temperature": ["temperature", "t090", "t190"],
+        "salinity": ["salinity", "sal00", "sal11"],
+        "pressure": ["pressure", "press", "prd"],
+        "depth": ["depth", "depsm", "z"]
+    }
+    for canon, names in aliases.items():
+        if canon not in df.columns:
+            for n in names:
+                if n in cols:
+                    df[canon] = df[cols[n]]
+                    break
+    # pressure fallback for CTD
+    if "depth" not in df.columns and "pressure" in df.columns:
+        df["depth"] = df["pressure"]
+    if "times" in df.columns:
+        df["times"] = pd.to_datetime(df["times"], errors="coerce")
+    return df
+
 def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample"):
     dataset_path = DATA_DIR / dataset
     csv_path = dataset_path / f"{file_name}.csv"
@@ -194,8 +217,7 @@ def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample
             df = df.assign(point_id=np.arange(len(df), dtype=np.int32))
         df = df.copy()
         df = df.set_index("point_id", drop=False)
-        if "times" in df.columns:
-            df["times"] = pd.to_datetime(df["times"], errors="coerce")
+        df = canonicalize_columns(df)
         if len(DATA_CACHE) >= MAX_DATA_CACHE:
             DATA_CACHE.pop(next(iter(DATA_CACHE)))
         DATA_CACHE[base_key] = df
@@ -230,7 +252,6 @@ def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample
             new_segment = np.zeros(n, dtype=bool)
             new_segment[0] = True
             new_segment[1:] = seg[1:] != seg[:-1]
-
         elif "times" in df.columns and not df["times"].isna().all():
             # Fallback to time-gap segmentation
             dt = df["times"].diff().dt.total_seconds().to_numpy()
@@ -238,7 +259,6 @@ def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample
             new_segment[0] = True
             new_segment[1:] = (dt[1:] > max_gap) | np.isnan(dt[1:])
             seg = np.cumsum(new_segment)
-
         else:
             # No time and no deployment → treat entire dataset as one segment
             seg = np.zeros(n, dtype=np.int64)
@@ -283,6 +303,7 @@ def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample
         out = pd.concat([avg_meta, avg_num], axis=1).reset_index(drop=True)
         out["point_id"] = np.arange(len(out), dtype=np.int32)
         out = out.set_index("point_id", drop=False)
+        out = canonicalize_columns(out)
         # -----------------------------------------------------
         # 6️⃣ Cache
         # -----------------------------------------------------
@@ -319,7 +340,14 @@ meta_vars = [
     "media_2", "media_path_2", "frame_2", "id_2", "link_2"
 ]
 
-sensor_vars = [col for col in df.columns if "_std" not in col and col not in meta_vars] if not df.empty else []
+sensor_vars = [
+    col for col in df.select_dtypes(include=[np.number]).columns
+    if "_std" not in col and col not in meta_vars
+] if not df.empty else []
+default_color_var = "temperature" if "temperature" in sensor_vars else (sensor_vars[0] if sensor_vars else None)
+ts_candidates = [v for v in sensor_vars if v not in ["temperature", "salinity"]]
+default_ts_var = "chlorophyll" if "chlorophyll" in ts_candidates else (ts_candidates[0] if ts_candidates else None)
+default_profile_var = "temperature" if "temperature" in sensor_vars else (sensor_vars[0] if sensor_vars else None)
 colormaps = [name for name in px.colors.sequential.__dict__ if not name.startswith("_")]
 
 stations = load_csv(MISC_DIR / "NESLTER_station_list.csv")
@@ -438,7 +466,7 @@ app.layout = html.Div([
                     dcc.Dropdown(
                         id='color_variable',
                         options=[{'label': var.capitalize(), 'value': var} for var in sensor_vars],
-                        value='temperature'
+                        value=default_color_var
                     )
                 ]),
                 html.Div([
@@ -462,22 +490,6 @@ app.layout = html.Div([
                     dcc.Input(id='z_max', type='number', value=200, debounce=True)
                 ]),
                 html.Div([
-                    html.Label('Min Latitude:'),
-                    dcc.Input(id='lat_min', type='number', value=None, debounce=True)
-                ]),
-                html.Div([
-                    html.Label('Max Latitude:'),
-                    dcc.Input(id='lat_max', type='number', value=None, debounce=True)
-                ]),
-                html.Div([
-                    html.Label('Min Longitude:'),
-                    dcc.Input(id='lon_min', type='number', value=None, debounce=True)
-                ]),
-                html.Div([
-                    html.Label('Max Longitude:'),
-                    dcc.Input(id='lon_max', type='number', value=None, debounce=True)
-                ]),
-                html.Div([
                     html.Label('Color Min:'),
                     dcc.Input(id='v_min', type='number', debounce=True)
                 ]),
@@ -486,7 +498,6 @@ app.layout = html.Div([
                     dcc.Input(id='v_max', type='number', debounce=True)
                 ])
             ], className='panel'),
-            dcc.Store(id='user_range_change', data=False),
             # Row 3: TS controls
             html.Div([
                 html.Label('T-S PLOT:', className='section-label'),
@@ -496,7 +507,7 @@ app.layout = html.Div([
                         id='ts_color_variable',
                         options=[{'label': var.capitalize(), 'value': var}
                                  for var in sensor_vars if var not in ['temperature', 'salinity']],
-                        value='chlorophyll'
+                        value=default_ts_var
                     )
                 ]),
                 html.Div([
@@ -525,7 +536,7 @@ app.layout = html.Div([
                         id='profile_variable',
                         options=[{'label': var.capitalize(), 'value': var}
                                 for var in sensor_vars],
-                        value='temperature'
+                        value=default_profile_var
                     )
                 ]),
                 html.Div([
@@ -606,13 +617,37 @@ app.layout = html.Div([
         ], className='left-panel'),
         # --- MIDDLE PLOTS ---
         html.Div([
-            html.Div([dcc.Graph(id='cruise_track')], id='track_container', className='cruise-track-graph resizable'),
+            html.Div([
+                dcc.Graph(
+                    id='cruise_track',
+                    responsive=True,
+                    style={"width": "100%", "height": "100%"}
+                )
+            ], id='track_container', className='cruise-track-graph resizable'),
+            html.Div([
+                dcc.Graph(
+                    id='main_plot',
+                    responsive=True,
+                    style={"width": "100%", "height": "100%"}
+                )
+            ], id='main_container', className='main-graph resizable'),
+            html.Div([
+                dcc.Graph(
+                    id='ts_plot',
+                    responsive=True,
+                    style={"width": "100%", "height": "100%"}
+                )
+            ], id='ts_container', className='ts-graph resizable'),
+            html.Div([
+                dcc.Graph(
+                    id='profile_plot',
+                    responsive=True,
+                    style={"width": "100%", "height": "100%"}
+                )
+            ], id='profile_container', className='profile-graph resizable'),
             dcc.Store(id='cruise_track_selected_data'),
-            dcc.Store(id='cruise_track_selection_store', data={"selected_ids": []}),
+            dcc.Store(id='cruise_track_selection_store', data={"selected_ids": None}),
             dcc.Store(id='main_plot_selected_data'),
-            html.Div([dcc.Graph(id='main_plot')], id='main_container', className='main-graph resizable'),
-            html.Div([dcc.Graph(id='ts_plot')], id='ts_container', className='ts-graph resizable'),
-            html.Div([dcc.Graph(id='profile_plot')], id='profile_container', className='profile-graph resizable'),
             dcc.Store(id="plot_size_store", storage_type="local")
         ], className='middle-panel'),
         # --- RIGHT PANEL (Selected Data Info only) ---
@@ -819,11 +854,9 @@ def update_color_variable_options(dataset, csv_file,
         return [], None, [], None, [], None
     csv_path = DATA_DIR / dataset / f"{csv_file}.csv"
     if csv_path not in SENSOR_VAR_CACHE:
-        if csv_path not in CSV_HEADER_CACHE:
-            CSV_HEADER_CACHE[csv_path] = pd.read_csv(csv_path, nrows=0).columns
-        cols = CSV_HEADER_CACHE[csv_path]
+        dfi = load_data(dataset, csv_file, sub_sample=1, mode="subsample")
         SENSOR_VAR_CACHE[csv_path] = [
-            c for c in cols
+            c for c in dfi.select_dtypes(include=[np.number]).columns
             if "_std" not in c and c not in meta_vars
         ]
     sensor_vars = SENSOR_VAR_CACHE[csv_path]
@@ -1030,7 +1063,7 @@ def draw_cruise_track(dataset, csv_file, xaxis, yaxis, fontsize, sub_sample, sam
         paper_bgcolor="white",
         plot_bgcolor="white"
     )
-    if xaxis in ["longitude", "latitude"]:
+    if xaxis in ["longitude", "latitude"] and yaxis in ["longitude", "latitude"]:
         fig.update_layout(yaxis=dict(scaleanchor="x", scaleratio=1))
     return fig
 
@@ -1139,32 +1172,6 @@ def store_scatter_selection_indices(selectedData):
     ]
     return {"selected_ids": selected_ids}
 
-# --- Callback: Track user coordinate/range edits ---
-@app.callback(
-    Output('user_range_change', 'data'),
-    Input('lat_min', 'value'),
-    Input('lat_max', 'value'),
-    Input('z_min', 'value'),
-    Input('z_max', 'value'),
-    State('lat_min', 'value'),
-    State('lat_max', 'value'),
-    State('z_min', 'value'),
-    State('z_max', 'value'),
-    State('user_range_change', 'data'),
-    prevent_initial_call=True
-)
-def track_range_change(lat_min, lat_max, ymin, ymax,
-                       prev_lat_min, prev_lat_max, prev_ymin, prev_ymax,
-                       was_changed):
-    """Track if the user manually changed coordinate or depth limits."""
-    changed = any([
-        lat_min != prev_lat_min,
-        lat_max != prev_lat_max,
-        ymin != prev_ymin,
-        ymax != prev_ymax
-    ])
-    return True if changed else was_changed
-
 # # --- Callback: Download CSV file ---
 # @app.callback(
 #     Output('download_dataframe_csv', 'data'),
@@ -1199,24 +1206,19 @@ def track_range_change(lat_min, lat_max, ymin, ymax,
         Input('v_max', 'value'),
         Input('z_min', 'value'),
         Input('z_max', 'value'),
-        Input('lat_min', 'value'),
-        Input('lat_max', 'value'),
-        Input('lon_min', 'value'),
-        Input('lon_max', 'value'),
         Input('hidden_opacity', 'value'),
         Input('plot_font_size', 'value'),
         Input('bathymetry', 'value'),
         Input('station', 'value'),
-        Input('user_range_change', 'data'),
         Input('cruise_track_selection_store', 'data'),
         Input('main_plot', 'relayoutData'),
     ]
 )
 def update_main_plot(dataset, csv_file, sub_sample, sampling_mode,
-                     x_axis, y_axis, color_var, color_map, size, vmin, vmax,
-                     zmin, zmax, lat_min, lat_max, lon_min, lon_max,
+                     x_axis, y_axis, color_var, color_map, size,
+                     vmin, vmax, zmin, zmax,
                      hidden_opacity, fontsize, bathymetry, station,
-                     user_changed_range, cruise_track_selection, relayoutData):
+                     cruise_track_selection, relayoutData):
     # --------------------------------------------------------
     # 1️⃣ Load Data
     # --------------------------------------------------------
@@ -1271,9 +1273,9 @@ def update_main_plot(dataset, csv_file, sub_sample, sampling_mode,
         ),
         customdata=df["point_id"].astype(np.int32).to_numpy(),
         hovertemplate=(
-            "Depth: %{y:.2f}<br>"
-            "Lat: %{x:.2f}<br>"
-            f"{color_var}: %{{marker.color:.2f}}<extra></extra>"
+            f"{x_axis.capitalize()}: %{{x:.2f}}<br>"
+            f"{y_axis.capitalize()}: %{{y:.2f}}<br>"
+            f"{color_var.capitalize()}: %{{marker.color:.2f}}<extra></extra>"
         ),
         showlegend=False,
     ))
@@ -1294,11 +1296,11 @@ def update_main_plot(dataset, csv_file, sub_sample, sampling_mode,
         return None
     visible_xrange = get_visible_range("xaxis", relayoutData)
     visible_yrange = get_visible_range("yaxis", relayoutData)
-    def resolve_range(axis_name, visible_range, user_min, user_max, data_series):
+    def resolve_range(visible_range, data_series, default_min=None, default_max=None):
         if visible_range is not None:
             return min(visible_range), max(visible_range)
-        if (user_min is not None) and (user_max is not None):
-            return user_min, user_max
+        if default_min is not None and default_max is not None:
+            return default_min, default_max
         return data_series.min(), data_series.max()
     # =========================
     # X AXIS
@@ -1308,13 +1310,7 @@ def update_main_plot(dataset, csv_file, sub_sample, sampling_mode,
         x_range = [df["times"].min(), df["times"].max()]
         xticks = xticktext = None
     elif x_axis in df.columns:
-        xmin, xmax = resolve_range(
-            x_axis,
-            visible_xrange,
-            lat_min if x_axis == "latitude" else lon_min,
-            lat_max if x_axis == "latitude" else lon_max,
-            df[x_axis]
-        )
+        xmin, xmax = resolve_range(visible_xrange, df[x_axis])
         xticks, digits = dynamic_ticks(xmin, xmax, nticks=6)
         if x_axis == "latitude":
             xticktext = [
@@ -1338,30 +1334,20 @@ def update_main_plot(dataset, csv_file, sub_sample, sampling_mode,
     yticks = yticktext = None
     ylabel = y_axis.capitalize()
     if y_axis in df.columns:
-        ymin, ymax = resolve_range(
-            y_axis,
-            visible_yrange,
-            zmin if y_axis == "depth" else lon_min,
-            zmax if y_axis == "depth" else lon_max,
-            df[y_axis]
-        )
         if y_axis == "depth":
+            ymin, ymax = resolve_range(visible_yrange, df[y_axis], zmin, zmax)
             ylabel = "Depth (m)"
-            y_range = [ymax, ymin]  # reverse depth
+            y_range = [ymax, ymin]
         else:
+            ymin, ymax = resolve_range(visible_yrange, df[y_axis])
             y_range = [ymin, ymax]
+
         if y_axis in ["latitude", "longitude"]:
             yticks, digits = dynamic_ticks(ymin, ymax, nticks=6)
             if y_axis == "latitude":
-                yticktext = [
-                    f"{abs(v):.{digits}f}°{'N' if v >= 0 else 'S'}"
-                    for v in yticks
-                ]
+                yticktext = [f"{abs(v):.{digits}f}°{'N' if v >= 0 else 'S'}" for v in yticks]
             else:
-                yticktext = [
-                    f"{abs(v):.{digits}f}°{'E' if v >= 0 else 'W'}"
-                    for v in yticks
-                ]
+                yticktext = [f"{abs(v):.{digits}f}°{'E' if v >= 0 else 'W'}" for v in yticks]
     else:
         y_range = None
     # --------------------------------------------------------
@@ -1754,23 +1740,20 @@ def update_profile_plot(dataset, csv_file, sub_sample, sampling_mode,
         mask = np.isin(df["point_id"].to_numpy(), ids)
         df = df.loc[mask]
     # --------------------------------------------------------
-    # 3️⃣ Expand scatter selection → full profiles OR subset
+    # 3️⃣ Expand scatter selection -> full profiles OR subset
     # --------------------------------------------------------
-    if selected_data and "selected_ids" in selected_data:
-        ids = np.asarray(selected_data["selected_ids"], dtype=np.int32)
+    selected_ids = None
+    if isinstance(selected_data, dict):
+        selected_ids = selected_data.get("selected_ids")
+    if selected_ids:
+        ids = np.asarray(selected_ids, dtype=np.int32)
         if "cast" in df.columns:
-            # find which casts contain selected points
             mask = np.isin(df.index.values, ids)
-            selected_profiles = (
-                df.loc[mask, "cast"]
-                .dropna()
-                .unique()
-            )
-            if len(selected_profiles):
+            selected_profiles = df.loc[mask, "cast"].dropna().unique()
+            if len(selected_profiles) > 0:
                 cast_mask = np.isin(df["cast"].to_numpy(), selected_profiles)
                 df = df.loc[cast_mask]
         else:
-            # no cast column → subset directly by selected points
             mask = np.isin(df.index.values, ids)
             df = df.loc[mask]
     # --------------------------------------------------------
@@ -2053,7 +2036,7 @@ if __name__ == '__main__':
     # Command-line arguments
     args = cli()
     args.port = str(args.port)
-    app.run(host=args.host, port=args.port, processes=MAX_WORKERS, threaded=False, debug=False)
+    app.run(host=args.host, port=args.port, threaded=True, debug=False)
 else:
     # WSGI-compatible Flask server (eg gunicorn)
     application = app.server

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,20 +10,25 @@ readme = "README.md"
 requires-python = ">=3.10"
 
 dependencies = [
-    "numpy>=1.23",
-    "pandas>=1.5",
-    "matplotlib>=3.6",
-    "scipy>=1.9",
-    "plotly>=5.0",
-    "dash>=2.0"
+    "numpy==2.1.2",
+    "pandas==2.2.3",
+    "matplotlib==3.9.2",
+    "scipy==1.14.1",
+    "plotly==5.24.1",
+    "dash==3.2.0",
+    "flask==3.0.3",
+    "werkzeug==3.0.6",
+    "jinja2==3.1.4",
+    "numba==0.63.1",
+    "PyYAML==6.0.2",
+    "tqdm==4.64.1"
 ]
 
 [project.optional-dependencies]
-
 dev = [
-    "jupyter",
-    "pytest",
-    "ipykernel"
+    "jupyter==1.0.0",
+    "ipykernel==6.29.5",
+    "pytest"
 ]
 
 shadowgraph = [
@@ -32,9 +37,9 @@ shadowgraph = [
 ]
 
 all = [
-    "jupyter",
+    "jupyter==1.0.0",
+    "ipykernel==6.29.5",
     "pytest",
-    "ipykernel",
     "opencv-python",
     "tator"
 ]
