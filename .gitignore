@@ -1,90 +1,30 @@
-# -----------------------
-# Python
-# -----------------------
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pkl
+# ======================
+# Ignore everything
+# ======================
+*
 
-# Virtual environments
-.venv/
-venv/
-env/
-
-# -----------------------
-# Jupyter
-# -----------------------
-.ipynb_checkpoints/
-
-# -----------------------
-# IDE
-# -----------------------
-.vscode/
-.idea/
-
-# -----------------------
-# Logs
-# -----------------------
-*.log
-
-# -----------------------
-# Dash cache
-# -----------------------
-.cache/
-dash_uploads/
-
-# -----------------------
-# OS
-# -----------------------
-.DS_Store
-Thumbs.db
-
-# -----------------------
-# Docker
-# -----------------------
-*.pid
-*.sock
-.env
-docker-compose.override.yml
-
-# -----------------------
-# Data outputs (large)
-# -----------------------
-raw_data/
-merged_data/
-indexes/
-media_list/
-modified_CAL/
-
-# Dash data folders with many CSVs
-dash_data/data/
-
-# Old code files
-old_code/
-
-# calibration files
-*.CAL
-
-# -----------------------
-# Ignore general CSVs
-# -----------------------
-*.csv
-
-# -----------------------
-# Allow important reference data
-# -----------------------
-!dash_data/misc/
-!dash_data/misc/**
-!src/stingray/data_reference/**
-
-# -----------------------
-# Keep assets
-# -----------------------
+# ======================
+# Allow directories we want tracked
+# ======================
+!src/
 !assets/
-!assets/**
+!dash_data/
+!dash_data/misc/
 
-# -----------------------
-# Ignore notebooks (optional)
-# -----------------------
-*.ipynb
+# Allow contents of those dirs
+!src/**
+!assets/**
+!dash_data/misc/**
+
+# ======================
+# Allow important root files
+# ======================
+!dashapp.py
+!pyproject.toml
+!requirements.txt
+!environment.yml
+!Dockerfile
+!docker-compose.yml
+!README.md
+!LICENSE
+!.gitignore
