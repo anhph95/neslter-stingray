@@ -116,391 +116,429 @@ def calibrate(sensor_type, raw_value, year=None, sign=None):
 ## SUNA data processing functions
 # Function to parse MATLAB .mat file to python dictionary
 def parse_mat(mat_path, name=None):
+    """
+    Parse a MATLAB .mat struct into a Python dictionary.
+    Parameters
+    ----------
+    mat_path : str or Path
+        Path to the .mat file.
+    name : str, optional
+        Variable name inside the .mat file. If omitted, uses the file stem.
+    Returns
+    -------
+    dict
+        Parsed MATLAB struct fields as a Python dictionary.
+    """
     mat_path = Path(mat_path)
-    if not name:
+    if not mat_path.exists():
+        raise FileNotFoundError(f"MAT file not found: {mat_path}")
+    if name is None:
         name = mat_path.stem
-    matfile = loadmat(mat_path)[name]
+    mat = loadmat(mat_path)
+    if name not in mat:
+        valid_keys = [k for k in mat.keys() if not k.startswith("__")]
+        raise KeyError(
+            f"Variable '{name}' not found in {mat_path}. "
+            f"Available variables: {valid_keys}"
+        )
+    matfile = mat[name]
     data = {}
-    for name in matfile.dtype.names:
-        data[name] = matfile[name][0][0]
+    if not hasattr(matfile, "dtype") or matfile.dtype.names is None:
+        raise ValueError(f"Variable '{name}' in {mat_path} is not a MATLAB struct.")
+    for field_name in matfile.dtype.names:
+        data[field_name] = matfile[field_name][0][0]
     return data
 
 # Function to check if required lines are in CAL path, needed for correction function
-def check_lines(file_path, initials='', out_dir='modified_CAL'):
-    out_path = out_dir + '/' + os.path.basename(file_path).split('.')[0] + f'_{initials}_modified.CAL'
-    if os.path.exists(out_path):
-        logging.info("Modified CAL file already exits.") 
-        return out_path
-    else:
-        # Create output directory for modified CAL file
-        os.makedirs(out_dir,exist_ok=True)
-        
-        # Block of lines to check and insert if missing
-        required_lines = """H,Pixel base,1,,,
+def check_lines(file_path, initials="", out_dir="modified_CAL"):
+    """
+    Ensure required metadata lines exist in a SUNA CAL file.
+    If required lines are missing, write a modified CAL file to `out_dir`
+    and return that new path. If the original file already contains the
+    required lines, return the original file path.
+    Parameters
+    ----------
+    file_path : str or Path
+        Path to the input CAL file.
+    initials : str, optional
+        Suffix tag for the modified file name.
+    out_dir : str or Path, optional
+        Directory where modified CAL files should be written.
+    Returns
+    -------
+    str
+        Path to the usable CAL file (original or modified).
+    """
+    file_path = Path(file_path)
+    out_dir = Path(out_dir)
+    out_path = out_dir / f"{file_path.stem}_{initials}_modified.CAL"
+    if out_path.exists():
+        logging.info("Modified CAL file already exists.")
+        return str(out_path)
+    required_lines = """H,Pixel base,1,,,
 H,Sensor Depth offset,0,,,
 H,Br wavelength offset,210,,,
 H,Min fit wavelength,,,,
 H,Max fit wavelength,,,,
 H,Use seawater dark current,No,,,
 H,Pressure coef,0.0265,,,"""
-        
-        # Load the file
-        with open(file_path, 'r') as file:
-            content = file.read()
-        
-        # Check if the required block is present
-        if required_lines not in content:
-            # Find the last "H,File creation time" line
-            insert_index = content.rfind("H,File creation time")
-        
-            if insert_index != -1:
-                # Insert the missing block before the last "H,File creation time" line
-                content = content[:insert_index] + required_lines + "\n" + content[insert_index:]
-        
-                # Write the updated content back to the file
-                with open(out_path, 'w') as file:
-                    file.write(content)
-        
-            logging.info("Required lines not present in orginal file.")
-            logging.info(f"Generating new CAL file as {out_path}")
-        else:
-            logging.info("Required lines are already present. Keeping original CAL file.")
-            
-    return out_path
+    with open(file_path, "r") as file:
+        content = file.read()
+    if required_lines in content:
+        logging.info("Required lines are already present. Using original CAL file.")
+        return str(file_path)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    insert_index = content.rfind("H,File creation time")
+    if insert_index == -1:
+        logging.warning(
+            f"Could not find insertion point in CAL file: {file_path}. "
+            f"Using original file."
+        )
+        return str(file_path)
+    content = content[:insert_index] + required_lines + "\n" + content[insert_index:]
+    with open(out_path, "w") as file:
+        file.write(content)
+    logging.info("Required lines not present in original file.")
+    logging.info(f"Generated modified CAL file: {out_path}")
+    return str(out_path)
 
 # Function to parse Nitrate calibration file
 def parse_SOSIK_NO3cal(cal_file):
-    # Initialize the output dictionary with NaNs or empty lists/strings
     cal = {
-        'type': 'SUNA',
-        'SN': '',
-        'CalTemp': None,
-        'CalSDN': None,
-        'CalDateStr': '',
-        'DC_flag': 1,
-        'pixel_base': None,
-        'depth_lag': None,
-        'WL_offset': None,
-        'min_fit_WL': None,
-        'max_fit_WL': None,
-        'pres_coef': None,
+        "type": "SUNA",
+        "SN": "",
+        "CalTemp": None,
+        "CalSDN": None,
+        "CalDateStr": "",
+        "DC_flag": 1,
+        "pixel_base": None,
+        "depth_lag": None,
+        "WL_offset": None,
+        "min_fit_WL": None,
+        "max_fit_WL": None,
+        "pres_coef": None,
     }
-
     replacements = {
-        'New ': '',
-        'DI DC Corr': 'Ref',
-        'Reference': 'Ref',
-        'Wavelength': 'WL',
-        'WaveLen': 'WL',
-        ',NO3': ',ENO3',
-        ',SWA': ',ESW',
-        ',ASW,': ',ESW,',
-        ',T*ASW': ',TSWA'
+        "New ": "",
+        "DI DC Corr": "Ref",
+        "Reference": "Ref",
+        "Wavelength": "WL",
+        "WaveLen": "WL",
+        ",NO3": ",ENO3",
+        ",SWA": ",ESW",
+        ",ASW,": ",ESW,",
+        ",T*ASW": ",TSWA",
     }
-
+    hdr = None
     try:
-        with open(cal_file, 'r') as f:
+        with open(cal_file, "r") as f:
             lines = f.readlines()
-
         data_lines = []
-
-
-        for tline in lines:
-            tline = tline.strip().split(',')
-
-            # Header info
-            if tline[0]=='H':
-                if tline[1].startswith('SUNA'):
-                    cal['type'] = 'SUNA'
-                    cal['SN'] = re.search(r'SUNA\s+(\d+)', tline[1]).group(1)
-                if tline[1].startswith('Lamp#'):
-                    cal['SN'] = ' '.join(tline[1:])
-
-                if re.search(r'\d+/\d+/\d{4}', tline[1]):
-                    d_str = re.search(r'\d+/\d+/\d{4}', tline).group(0)
-                    cal['CalDateStr'] = d_str
-                    cal['CalSDN'] = datetime.strptime(d_str, '%m/%d/%Y').date()
-
-                if 'creation time' in tline[1]:
-                    d_str = re.search(r'\d{2}-\w{3}-\d{4}', tline[1]).group(0)
-                    cal['CalDateStr'] = d_str
-                    cal['CalSDN'] = datetime.strptime(d_str, '%d-%b-%Y').date()
-
-                if 'CalTemp' in tline[1]:
-                    cal['CalTemp'] = float(tline[2]) if tline[2] else None
-
-                if re.search(r'T_CAL', tline[1]) and cal['CalTemp'] is None:
-                    cal['CalTemp'] = float(tline[1].split(' ')[1])                    
-
-                if 'Pixel base' in tline[1]:
-                    cal['pixel_base'] = int(tline[2]) if tline[2] else None
-
-                if 'Sensor Depth' in tline[1]:
-                    cal['depth_lag'] = [float(x) if x else None for x in tline[2:4]]
-
-                if 'Br wavelength' in tline[1]:
-                    cal['WL_offset'] = float(tline[2]) if tline[2] else None
-
-                if 'Min fit' in tline[1]:
-                    cal['min_fit_WL'] = float(tline[3]) if tline[3] else None
-
-                if 'Max fit' in tline[1]:
-                    cal['max_fit_WL'] = float(tline[3]) if tline[3] else None
-
-                if 'Use seawater dark' in tline[1]:
-                    cal['DC_flag'] = 0 if 'yes' in tline[1].lower() else 1
-
-                if 'Pressure coef' in tline[1]:
-                    cal['pres_coef'] = float(tline[2])
-
-                if 'Wavelength' in tline and 'NO3' in tline:
-                    tline = ','.join(tline)
+        for line in lines:
+            tline = line.strip().split(",")
+            if not tline or len(tline) < 2:
+                continue
+            if tline[0] == "H":
+                field = tline[1]
+                if field.startswith("SUNA"):
+                    cal["type"] = "SUNA"
+                    m = re.search(r"SUNA\s+(\d+)", field)
+                    if m:
+                        cal["SN"] = m.group(1)
+                if field.startswith("Lamp#"):
+                    cal["SN"] = " ".join(tline[1:])
+                m = re.search(r"\d+/\d+/\d{4}", field)
+                if m:
+                    d_str = m.group(0)
+                    cal["CalDateStr"] = d_str
+                    cal["CalSDN"] = datetime.strptime(d_str, "%m/%d/%Y").date()
+                if "creation time" in field:
+                    m = re.search(r"\d{2}-\w{3}-\d{4}", field)
+                    if m:
+                        d_str = m.group(0)
+                        cal["CalDateStr"] = d_str
+                        cal["CalSDN"] = datetime.strptime(d_str, "%d-%b-%Y").date()
+                if "CalTemp" in field:
+                    cal["CalTemp"] = float(tline[2]) if len(tline) > 2 and tline[2] else None
+                if re.search(r"T_CAL", field) and cal["CalTemp"] is None:
+                    parts = field.split(" ")
+                    if len(parts) > 1:
+                        try:
+                            cal["CalTemp"] = float(parts[1])
+                        except ValueError:
+                            pass
+                if "Pixel base" in field:
+                    cal["pixel_base"] = int(tline[2]) if len(tline) > 2 and tline[2] else None
+                if "Sensor Depth" in field:
+                    vals = tline[2:4]
+                    cal["depth_lag"] = [float(x) if x else None for x in vals]
+                if "Br wavelength" in field:
+                    cal["WL_offset"] = float(tline[2]) if len(tline) > 2 and tline[2] else None
+                if "Min fit" in field:
+                    cal["min_fit_WL"] = float(tline[3]) if len(tline) > 3 and tline[3] else None
+                if "Max fit" in field:
+                    cal["max_fit_WL"] = float(tline[3]) if len(tline) > 3 and tline[3] else None
+                if "Use seawater dark" in field:
+                    cal["DC_flag"] = 0 if "yes" in field.lower() else 1
+                if "Pressure coef" in field:
+                    cal["pres_coef"] = float(tline[2]) if len(tline) > 2 and tline[2] else None
+                if "Wavelength" in tline and "NO3" in tline:
+                    hdr_line = ",".join(tline)
                     for old, new in replacements.items():
-                        tline = tline.replace(old, new)
-                    hdr = tline.split(',')[1:]
-
-            if tline[0]=='E':
+                        hdr_line = hdr_line.replace(old, new)
+                    hdr = hdr_line.split(",")[1:]
+            elif tline[0] == "E":
                 data_lines.append(tline[1:])
-
         if len(data_lines) == 0:
             logging.info(f"File exists but no data lines found for: {cal_file}")
             return cal
-
-        # Convert data lines to a numpy array
+        if hdr is None:
+            logging.warning(f"No wavelength/data header found in calibration file: {cal_file}")
+            return cal
         data = np.array(data_lines, dtype=float)
-
-        # # To data frame
-        # data = pd.DataFrame(data, columns = hdr)
-
-        #Assign data to the respective fields in cal
+        if data.shape[1] != len(hdr):
+            logging.warning(
+                f"Header/data width mismatch in {cal_file}: "
+                f"{data.shape[1]} data columns vs {len(hdr)} header columns"
+            )
+            n = min(data.shape[1], len(hdr))
+            data = data[:, :n]
+            hdr = hdr[:n]
         for i, name in enumerate(hdr):
             cal[name] = data[:, i]
-
     except FileNotFoundError:
         logging.info(f"Cannot find calibration file at: {cal_file}")
         return cal
-
     return cal
 
 
 # Bofu's correction algorithm
 def calc_bofu_no3(spec, ncal, pcor_flag):
-    fig_flag = 0  # Set to 1 to show nitrate fit
-    WL_offset = ncal['WL_offset']
-    
+    """
+    Apply SUNA nitrate correction algorithm.
+    Parameters
+    ----------
+    spec : dict
+        Spectral data dictionary.
+    ncal : dict
+        Parsed nitrate calibration dictionary.
+    pcor_flag : int
+        Whether to apply pressure correction (1=yes, 0=no).
+    Returns
+    -------
+    dict
+        Output dictionary containing corrected nitrate and fit diagnostics.
+    """
+    WL_offset = ncal["WL_offset"]
     d = spec.copy()
-    d['P'] = d['STP'][2]
-    d['T'] = d['STP'][1]
-    d['S'] = d['STP'][0]
-    del d['STP']
-    
-    if ncal['pixel_base'] == 0:
-        d['spectra_pix_range'] += 1
-        d['pix_fit_win'] += 1
-        logging.info('Pixel registration offset by +1')
-    
-    DC = d['DC'] if ncal['DC_flag'] != 0 else d['SWDC']
-    
-    if ncal['min_fit_WL']:
-        d['pix_fit_win'][0] = np.where(ncal['WL'] >= ncal['min_fit_WL'])[0][0]
-        d['WL_fit_win'][0] = ncal['WL'][d['pix_fit_win'][0]]
-    
-    if ncal['max_fit_WL']:
-        d['pix_fit_win'][1] = np.where(ncal['WL'] <= ncal['max_fit_WL'])[0][-1]
-        d['WL_fit_win'][1] = ncal['WL'][d['pix_fit_win'][1]]
-    
-    # Check data range
-    if d['spectra_WL_range'][0][0] > d['WL_fit_win'][0][0]:
-        logging.info(f"Min WL of returned spectra ({d['spectra_WL_range'][0][0]}) is greater than Min WL of fit window ({d['WL_fit_win'][0][0]}).")
-        d['WL_fit_win'][0][0] = d['spectra_WL_range'][0][0]
-        logging.info(f"Fit window adjusted [{d['WL_fit_win'][0][0]} {d['WL_fit_win'][0][1]}] & NO3 estimate will be compromised!")
-    
-    if d['spectra_WL_range'][0][1] < d['WL_fit_win'][0][1]:
-        logging.info(f"Max WL of returned spectra ({d['spectra_WL_range'][0][1]}) is less than Max WL of fit window ({d['WL_fit_win'][0][1]}).")
-        d['WL_fit_win'][0][1] = d['spectra_WL_range'][0][1]
-        logging.info(f"Fit window adjusted [{d['WL_fit_win'][0][0]} {d['WL_fit_win'][0][1]}] & NO3 estimate will be compromised!")
-    
-    # Get pixel fit window for SUNA floats based on WL fit range
-    if np.isnan(np.sum(d['pix_fit_win'])) and 'WL_fit_win' in d:
-        pfit_low = np.where(ncal['WL'] >= d['WL_fit_win'][0][0])[0][0]
-        pfit_hi = np.where(ncal['WL'] <= d['WL_fit_win'][0][1])[0][-1]
-        d['pix_fit_win'] = [pfit_low, pfit_hi]
-    
-    # Get sample pixel range indexes
-    ind1 = np.where(ncal['WL'] >= d['spectra_WL_range'][0][0])[0][0]
-    ind2 = np.where(ncal['WL'] <= d['spectra_WL_range'][0][1])[0][-1]
-    d['spectra_pix_range'] = [ind1, ind2]
-    saved_pixels = np.arange(d['spectra_pix_range'][0], d['spectra_pix_range'][1] + 1)
-    
-    # Size of sample intensity spectra matrix
-    rows, cols = d['UV_INTEN'].shape
-    
-    # Subset calibration data over pixel range identified from sample line
-    REF = np.tile(ncal['Ref'][saved_pixels], (rows, 1))
-    WL = np.tile(ncal['WL'][saved_pixels], (rows, 1))
-    ESW = np.tile(ncal['ESW'][saved_pixels], (rows, 1))
-    ENO3 = ncal['ENO3'][saved_pixels]
-    
-    if 'EHS' in ncal:
-        EHS = ncal['EHS'][saved_pixels]
-    
-    # Subtract dark current intensities
-    UV_INTEN_SW = d['UV_INTEN'] - DC
-    
-    # Check for UV_INTEN_SW <= 0 and set to NaN
+    d["P"] = d["STP"][2]
+    d["T"] = d["STP"][1]
+    d["S"] = d["STP"][0]
+    del d["STP"]
+    if ncal["pixel_base"] == 0:
+        d["spectra_pix_range"] += 1
+        d["pix_fit_win"] += 1
+        logging.info("Pixel registration offset by +1")
+    DC = d["DC"] if ncal["DC_flag"] != 0 else d["SWDC"]
+    if ncal["min_fit_WL"]:
+        d["pix_fit_win"][0] = np.where(ncal["WL"] >= ncal["min_fit_WL"])[0][0]
+        d["WL_fit_win"][0] = ncal["WL"][d["pix_fit_win"][0]]
+    if ncal["max_fit_WL"]:
+        d["pix_fit_win"][1] = np.where(ncal["WL"] <= ncal["max_fit_WL"])[0][-1]
+        d["WL_fit_win"][1] = ncal["WL"][d["pix_fit_win"][1]]
+    if d["spectra_WL_range"][0][0] > d["WL_fit_win"][0][0]:
+        logging.info(
+            f"Min WL of returned spectra ({d['spectra_WL_range'][0][0]}) is greater "
+            f"than Min WL of fit window ({d['WL_fit_win'][0][0]})."
+        )
+        d["WL_fit_win"][0][0] = d["spectra_WL_range"][0][0]
+        logging.info(
+            f"Fit window adjusted [{d['WL_fit_win'][0][0]} {d['WL_fit_win'][0][1]}] "
+            "and NO3 estimate may be compromised."
+        )
+    if d["spectra_WL_range"][0][1] < d["WL_fit_win"][0][1]:
+        logging.info(
+            f"Max WL of returned spectra ({d['spectra_WL_range'][0][1]}) is less "
+            f"than Max WL of fit window ({d['WL_fit_win'][0][1]})."
+        )
+        d["WL_fit_win"][0][1] = d["spectra_WL_range"][0][1]
+        logging.info(
+            f"Fit window adjusted [{d['WL_fit_win'][0][0]} {d['WL_fit_win'][0][1]}] "
+            "and NO3 estimate may be compromised."
+        )
+    if np.isnan(np.sum(d["pix_fit_win"])) and "WL_fit_win" in d:
+        pfit_low = np.where(ncal["WL"] >= d["WL_fit_win"][0][0])[0][0]
+        pfit_hi = np.where(ncal["WL"] <= d["WL_fit_win"][0][1])[0][-1]
+        d["pix_fit_win"] = [pfit_low, pfit_hi]
+    ind1 = np.where(ncal["WL"] >= d["spectra_WL_range"][0][0])[0][0]
+    ind2 = np.where(ncal["WL"] <= d["spectra_WL_range"][0][1])[0][-1]
+    d["spectra_pix_range"] = [ind1, ind2]
+    saved_pixels = np.arange(d["spectra_pix_range"][0], d["spectra_pix_range"][1] + 1)
+    rows, cols = d["UV_INTEN"].shape
+    REF = np.tile(ncal["Ref"][saved_pixels], (rows, 1))
+    WL = np.tile(ncal["WL"][saved_pixels], (rows, 1))
+    ESW = np.tile(ncal["ESW"][saved_pixels], (rows, 1))
+    ENO3 = ncal["ENO3"][saved_pixels]
+    UV_INTEN_SW = d["UV_INTEN"] - DC
     if np.count_nonzero(UV_INTEN_SW <= 0):
         UV_INTEN_SW[UV_INTEN_SW <= 0] = np.nan
-        logging.info('UV Intensities <= DC found. Setting these low intensities to NaN')
-    
-    # Absorbance spectra for all samples in profile
-    ABS_SW = -np.log10(UV_INTEN_SW / REF)
-    
-    # # Calculate temperature corrected absorbances
-    # A = 1.1500276
-    # B = 0.02840
-    # C = -0.3101349
-    # D = 0.001222
-    
-    ctd_temp = np.tile(d['T'], (cols, 1)).T
-    ctd_sal = np.tile(d['S'], (cols, 1)).T
-    cal_temp = np.tile(ncal['CalTemp'], (rows, cols))
-    
+        logging.info("UV intensities <= dark current found. Setting to NaN.")
+    ratio = UV_INTEN_SW / REF
+    bad_ratio = (~np.isfinite(ratio)) | (ratio <= 0)
+    if np.any(bad_ratio):
+        ratio[bad_ratio] = np.nan
+        logging.info("Non-positive or invalid UV/REF ratios found. Setting to NaN.")
+    ABS_SW = -np.log10(ratio)
+    ctd_temp = np.tile(d["T"], (cols, 1)).T
+    ctd_sal = np.tile(d["S"], (cols, 1)).T
+    cal_temp = np.tile(ncal["CalTemp"], (rows, cols))
     Tcorr_coef = [1.27353e-07, -7.56395e-06, 2.91898e-05, 1.67660e-03, 1.46380e-02]
     Tcorr = np.polyval(Tcorr_coef, (WL - WL_offset)) * (ctd_temp - cal_temp)
     ESW_in_situ = ESW * np.exp(Tcorr)
-    
     if pcor_flag == 1:
-        pres_term = (1 - d['P'] / 1000 * ncal['pres_coef']).reshape(-1, 1)
+        pres_term = (1 - d["P"] / 1000 * ncal["pres_coef"]).reshape(-1, 1)
         ESW_in_situ *= pres_term
-    
     ABS_Br_tcor = ESW_in_situ * ctd_sal
     ABS_cor = ABS_SW - ABS_Br_tcor
-    
-    # Calculate the nitrate concentration and the slope and intercept of the baseline absorbance
-    t_fit = (saved_pixels >= d['pix_fit_win'][0]) & (saved_pixels <= d['pix_fit_win'][1])
-    
+    t_fit = (saved_pixels >= d["pix_fit_win"][0]) & (saved_pixels <= d["pix_fit_win"][1])
     Fit_WL = WL[0, t_fit]
     Fit_ENO3 = ENO3[t_fit]
     Ones = np.ones_like(Fit_ENO3)
-    
     M = np.column_stack((Fit_ENO3, Ones / 100, Fit_WL / 1000))
     M_INV = np.linalg.pinv(M)
     colsM = M.shape[1]
-    
     NO3 = np.full((rows, colsM + 3), np.nan)
-    
     for i in range(rows):
         samp_ABS_cor = ABS_cor[i, t_fit]
+        if np.all(np.isnan(samp_ABS_cor)):
+            continue
         NO3[i, :3] = M_INV @ samp_ABS_cor
-        NO3[i, 1] /= 100  # baseline intercept
-        NO3[i, 2] /= 1000  # baseline slope
-        
+        NO3[i, 1] /= 100
+        NO3[i, 2] /= 1000
         ABS_BL = WL[i, :] * NO3[i, 2] + NO3[i, 1]
-        ABS_NO3 = ABS_cor[i, :] - ABS_BL
         ABS_NO3_EXP = ENO3 * NO3[i, 0]
         FIT_DIF = ABS_cor[i, :] - ABS_BL - ABS_NO3_EXP
-        RMS_ERROR = np.sqrt(np.sum(FIT_DIF[t_fit] ** 2) / np.sum(t_fit))
+        RMS_ERROR = np.sqrt(np.nansum(FIT_DIF[t_fit] ** 2) / np.sum(t_fit))
         ind_240 = np.where(Fit_WL <= 240)[0][-1]
         ABS_240 = [Fit_WL[ind_240], samp_ABS_cor[ind_240]]
-        
         NO3[i, colsM:colsM + 3] = [RMS_ERROR, *ABS_240]
-        
-        # if fig_flag == 1 and not np.isnan(NO3[i, 0]):
-        #     import matplotlib.pyplot as plt
-            
-        #     plt.figure(101, figsize=(12, 8))
-        #     plt.plot(WL[i, :], ABS_SW[i, :], 'k-', linewidth=2)
-        #     plt.plot(WL[i, :], ABS_BL, 'g-', linewidth=2)
-        #     plt.plot(WL[i, :], ABS_Br_tcor[i, :] + ABS_BL, 'b-', linewidth=2)
-        #     plt.plot(WL[i, :], ABS_cor[i, :], 'ro', linewidth=1)
-        #     plt.plot(WL[i, :], ABS_NO3_EXP + ABS_BL, 'r-', linewidth=2)
-        #     plt.xlim([Fit_WL[0] - 5, Fit_WL[-1] + 5])
-        #     plt.xlabel('Wavelength, nm')
-        #     plt.ylabel('Absorbance')
-        #     plt.legend(['Sample', 'Baseline', 'Br+BL', 'NO3+BL obs', 'NO3+BL fit'], loc='upper right')
-        #     plt.show()
-    
-    # Create an output dictionary
     out = {
-        'hdr': ['SDN', 'AVG DC', 'Pres', 'Temp', 'Sal', 'SBE_NO3, uM/L', 'NO3, uM/L', 'BL_B', 'BL_M', 'RMS ERROR', 'WL~240', 'ABS~240'],
-        'info': {
-            'WL_fit_window': d['WL_fit_win'],
-            'spectra_WL_range': d['spectra_WL_range'],
-            'WL_offset': WL_offset
-        }
+        "hdr": [
+            "SDN",
+            "AVG DC",
+            "Pres",
+            "Temp",
+            "Sal",
+            "SBE_NO3, uM/L",
+            "NO3, uM/L",
+            "BL_B",
+            "BL_M",
+            "RMS ERROR",
+            "WL~240",
+            "ABS~240",
+        ],
+        "info": {
+            "WL_fit_window": d["WL_fit_win"],
+            "spectra_WL_range": d["spectra_WL_range"],
+            "WL_offset": WL_offset,
+        },
     }
-    
     avg_DC = np.nanmean(DC, axis=1)
-    NO3 = np.column_stack((d['SDN'], avg_DC, d['P'], d['T'], d['S'], d['NO3'], NO3))
+    NO3 = np.column_stack((d["SDN"], avg_DC, d["P"], d["T"], d["S"], d["NO3"], NO3))
     tnan = np.isnan(NO3[:, 5])
-    out['data'] = NO3[~tnan, :]
-    
+    out["data"] = NO3[~tnan, :]
     return out
 
-def calibrate_nitrate(df, CRUISE, nitrate_col='NitrateConcentration[uM]', dark_col='DarkValueUsedForFit'):
+def calibrate_nitrate(df, CRUISE, nitrate_col="NitrateConcentration[uM]", dark_col="DarkValueUsedForFit"):
     """
-    Calibrates nitrate concentration from SUNA sensor data.
-    Parameters:
-        df (pd.DataFrame): Dataframe containing nitrate data.
-        CRUISE (str): Cruise identifier to find the calibration file.
-        nitrate_col (str, optional): Column name for raw nitrate concentration.
-        dark_col (str, optional): Column name for dark value used in fit.
-    Returns:
-        np.ndarray: Corrected nitrate concentrations.
+    Calibrate nitrate concentration from SUNA sensor data.
+    This version preserves alignment with the original dataframe rows and
+    does not mutate the caller's dataframe in place.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe containing SUNA data.
+    CRUISE : str
+        Cruise identifier used to find the calibration file.
+    nitrate_col : str, optional
+        Raw nitrate column name.
+    dark_col : str, optional
+        Dark-current column name.
+    Returns
+    -------
+    np.ndarray
+        Corrected nitrate concentrations aligned to the original input rows.
     """
-    df[nitrate_col] = pd.to_numeric(df[nitrate_col], errors='coerce')
-    # Package data directory: src/stingray/data_reference/
+    df = df.copy()
+    out_full = np.full(len(df), np.nan, dtype=float)
+    df[nitrate_col] = pd.to_numeric(df[nitrate_col], errors="coerce")
+    if dark_col in df.columns:
+        df[dark_col] = pd.to_numeric(df[dark_col], errors="coerce")
     pkg_dir = Path(__file__).resolve().parent
     data_ref_dir = pkg_dir / "data_reference"
     spec_path = data_ref_dir / "spec.mat"
     hdr_file = data_ref_dir / "suna_hdr.txt"
-    # Cruise-specific calibration files remain at repo-level
     cal_dir = Path("suna_calibration")
-    # Find the corresponding CAL file for the cruise
     try:
         cal_file = next(file for file in os.listdir(cal_dir) if CRUISE.upper() in file)
         cal_path = cal_dir / cal_file
     except StopIteration:
         logging.info(f"No calibration file found for cruise {CRUISE}, using raw nitrate values.")
-        df.loc[df[dark_col] == 0, nitrate_col] = np.nan
-        return df[nitrate_col].to_numpy()
-    # Ensure required lines in CAL file
-    cal_path = Path(check_lines(str(cal_path), 'AP'))
-    # Load SPEC and CAL data
-    spec = parse_mat(str(spec_path))
+        raw = df[nitrate_col].to_numpy(dtype=float)
+        if dark_col in df.columns:
+            raw[df[dark_col].to_numpy(dtype=float) == 0] = np.nan
+        return raw
+    cal_path = Path(check_lines(str(cal_path), "AP"))
+    spec = parse_mat(spec_path)
     ncal = parse_SOSIK_NO3cal(str(cal_path))
-    # Get UV spectrum headers
-    with open(hdr_file, 'r') as file:
-        nitrate_hdr = file.readline().strip().split(',')
-    # Extract UV spectrum column names
-    uv_cols = [col for col in df.columns if re.search(r'SpectrumCh', col)]
-    uv_list = [col for col in nitrate_hdr if re.search(r'UV\(\d+(\.\d+)?\)', col)]
-    # Rename spectrum columns for consistency
-    df.rename(columns=dict(zip(uv_cols, uv_list)), inplace=True)
-    # Drop rows with missing nitrate values
-    df[uv_list] = df[uv_list].apply(pd.to_numeric, errors='coerce')
-    df.dropna(subset=[nitrate_col], inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    # Prepare data for correction
-    spec['STP'] = [
-        df['Salinity'].to_numpy(),
-        df['Temperature'].to_numpy(),
-        df['Pressure'].to_numpy(),
+    with open(hdr_file, "r") as file:
+        nitrate_hdr = file.readline().strip().split(",")
+    uv_cols = [col for col in df.columns if re.search(r"SpectrumCh", col)]
+    uv_list = [col for col in nitrate_hdr if re.search(r"UV\(\d+(\.\d+)?\)", col)]
+    if len(uv_cols) != len(uv_list):
+        raise ValueError(
+            f"Mismatch between dataframe spectrum columns ({len(uv_cols)}) "
+            f"and SUNA header UV columns ({len(uv_list)})."
+        )
+    rename_map = dict(zip(uv_cols, uv_list))
+    df = df.rename(columns=rename_map)
+    required_cols = [nitrate_col, "Salinity", "Temperature", "Pressure", "matdate", *uv_list]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise KeyError(f"Missing required columns for nitrate calibration: {missing}")
+    df[uv_list] = df[uv_list].apply(pd.to_numeric, errors="coerce")
+    valid = df[nitrate_col].notna()
+    if not valid.any():
+        return out_full
+    work = df.loc[valid].copy()
+    work_idx = work.index.to_numpy()
+    spec["STP"] = [
+        work["Salinity"].to_numpy(dtype=float),
+        work["Temperature"].to_numpy(dtype=float),
+        work["Pressure"].to_numpy(dtype=float),
     ]
-    spec['UV_INTEN'] = df[uv_list].to_numpy(dtype=float)
-    spec['DC'] = np.outer(df[dark_col], np.ones(len(uv_list)))
-    spec['NO3'] = df[nitrate_col].to_numpy()
-    spec['SDN'] = df['matdate'].to_numpy()
-    # Define spectral wavelength range from calibration
-    spec['spectra_WL_range'][0][0] = ncal['WL'][0]
-    spec['spectra_WL_range'][0][1] = ncal['WL'][-1]
-    # Perform nitrate correction calculation
-    out = calc_bofu_no3(spec, ncal, pcor_flag=1)
-    # Apply filtering: Set values to NaN where dark value mask is zero
-    dv_mask = out['data'][:, 1] == 0
-    out['data'][dv_mask, 6] = np.nan
+    spec["UV_INTEN"] = work[uv_list].to_numpy(dtype=float)
+    spec["DC"] = np.outer(work[dark_col].to_numpy(dtype=float), np.ones(len(uv_list)))
+    spec["NO3"] = work[nitrate_col].to_numpy(dtype=float)
+    spec["SDN"] = work["matdate"].to_numpy()
+    spec["spectra_WL_range"][0][0] = ncal["WL"][0]
+    spec["spectra_WL_range"][0][1] = ncal["WL"][-1]
+    result = calc_bofu_no3(spec, ncal, pcor_flag=1)
+    corrected = result["data"][:, 6]
+    if len(corrected) != len(work_idx):
+        logging.warning(
+            f"Corrected nitrate length ({len(corrected)}) does not match valid input rows "
+            f"({len(work_idx)}). Attempting positional assignment to available rows only."
+        )
+        n = min(len(corrected), len(work_idx))
+        out_full[work_idx[:n]] = corrected[:n]
+    else:
+        out_full[work_idx] = corrected
+    if dark_col in work.columns:
+        dark_zero = work[dark_col].to_numpy(dtype=float) == 0
+        out_full[work_idx[dark_zero]] = np.nan
     logging.info(f"Calibration file found for cruise {CRUISE}, TSP correction applied.")
-    return out['data'][:, 6]
+    return out_full
 
 # Convert GPS
 def convert_gps(raw_series, sign_series):

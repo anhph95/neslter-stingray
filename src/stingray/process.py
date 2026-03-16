@@ -7,7 +7,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from .utils import *
-from numba import njit
+
 # =========================
 # CLI
 # =========================
@@ -205,8 +205,8 @@ def main():
         max_gap_sec=300.0,
         min_turn_depth=10.0,
     )
-    ctd_agg["cast"] = cast.astype(np.int64)
-    ctd_agg["deployment"] = deployment.astype(np.int64)
+    ctd_agg["cast"] = pd.Series(cast).astype("Int64")
+    ctd_agg["deployment"] = pd.Series(deployment).astype("Int64")
     logger.info(f"Detected casts: {ctd_agg['cast'].nunique()}")
     logger.info(f"Detected deployments: {ctd_agg['deployment'].nunique()}")
     # -------------------------
@@ -279,13 +279,16 @@ def main():
     # -------------------------
     gps_cols = ["latitude", "longitude"]
     tmp = sled.set_index("times")[gps_cols].copy()
-    for dep_id in sled["deployment"].unique():
-        mask = sled["deployment"] == dep_id
-        tmp.loc[mask] = (
-            tmp.loc[mask]
+    dep = sled.set_index("times")["deployment"]
+    for dep_id in dep.dropna().unique():
+        mask = dep == dep_id
+        tmp.loc[mask, gps_cols] = (
+            tmp.loc[mask, gps_cols]
             .interpolate(method="time", limit_area="inside")
         )
-    sled[gps_cols] = tmp.reset_index(drop=True)
+    sled = sled.set_index("times")
+    sled.loc[tmp.index, gps_cols] = tmp[gps_cols]
+    sled = sled.reset_index()
     logger.info("QC: interpolated GPS inside deployments only.")
     # ------------------------
     # Save output
