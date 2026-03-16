@@ -21,7 +21,7 @@ sudo apt update
 sudo apt install python3-venv -y
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ### Or create Conda environment:
@@ -39,13 +39,14 @@ conda activate venv
 
 ### Process sensor data
 ```
-usage: time_bin.py [-h] --cruise CRUISE --start START --end END
-                   [--root ROOT] [--cal-year CAL_YEAR]
-                   [--time-bin-seconds TIME_BIN_SECONDS]
-                   [--out-dir OUT_DIR]
-                   [--media-list-dirs MEDIA_LIST_DIRS [MEDIA_LIST_DIRS ...]]
-                   [--overwrite-index]
-                   [--log-level {DEBUG,INFO,WARNING,ERROR}]
+usage: python -m stingray.process [-h] --cruise CRUISE --start START --end END
+                                  [--root ROOT]
+                                  [--cal-year CAL_YEAR]
+                                  [--time-bin-seconds TIME_BIN_SECONDS]
+                                  [--out-dir OUT_DIR]
+                                  [--media-list-dirs MEDIA_LIST_DIRS ...]
+                                  [--overwrite-index]
+                                  [--log-level {DEBUG,INFO,WARNING,ERROR}]
 
 Stingray CTD-binned sensor aggregation + media + casts (dashboard build)
 
