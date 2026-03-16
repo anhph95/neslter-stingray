@@ -19,13 +19,16 @@
 !dash_data/misc/**
 
 # ======================
-# Exclude build artifacts inside src
+# Ignore Python cache and build artifacts
 # ======================
-src/*.egg-info/
+src/**/__pycache__/
+src/**/*.pyc
+src/**/*.pyo
+src/**/*.pyd
 src/**/*.egg-info/
 
 # ======================
-# Allow important root files
+# Allow important root project files
 # ======================
 !dashapp.py
 !pyproject.toml
@@ -36,3 +39,69 @@ src/**/*.egg-info/
 !README.md
 !LICENSE
 !.gitignore
+!.dockerignore
+!.gitattributes
+
+# ======================
+# Ignore common Python artifacts anywhere
+# ======================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+
+# ======================
+# Ignore virtual environments
+# ======================
+.venv/
+venv/
+env/
+
+# ======================
+# Ignore notebooks
+# ======================
+*.ipynb
+.ipynb_checkpoints/
+
+# ======================
+# Ignore logs and temp
+# ======================
+*.log
+.cache/
+dash_uploads/
+
+# ======================
+# OS / IDE
+# ======================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ======================
+# Ignore large data and outputs
+# ======================
+raw_data/
+merged_data/
+indexes/
+media_list/
+modified_CAL/
+dash_data/data/
+old_code/
+
+# ======================
+# Ignore calibration / binary data
+# ======================
+*.CAL
+*.mat
+
+# ======================
+# Ignore general CSV outputs
+# ======================
+*.csv
+
+# ======================
+# Re-allow small reference CSVs
+# ======================
+!dash_data/misc/**/*.csv
