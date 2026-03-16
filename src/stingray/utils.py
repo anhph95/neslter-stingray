@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from scipy.io import loadmat
 import logging
 from numba import njit
+from pathlib import Path
 
 
 # column_mappings.py
@@ -114,9 +115,10 @@ def calibrate(sensor_type, raw_value, year=None, sign=None):
 
 ## SUNA data processing functions
 # Function to parse MATLAB .mat file to python dictionary
-def parse_mat(mat_path,name=None):
+def parse_mat(mat_path, name=None):
+    mat_path = Path(mat_path)
     if not name:
-        name = mat_path.split('/')[-1].split('.')[0]
+        name = mat_path.stem
     matfile = loadmat(mat_path)[name]
     data = {}
     for name in matfile.dtype.names:
@@ -438,74 +440,66 @@ def calc_bofu_no3(spec, ncal, pcor_flag):
 def calibrate_nitrate(df, CRUISE, nitrate_col='NitrateConcentration[uM]', dark_col='DarkValueUsedForFit'):
     """
     Calibrates nitrate concentration from SUNA sensor data.
-
     Parameters:
         df (pd.DataFrame): Dataframe containing nitrate data.
         CRUISE (str): Cruise identifier to find the calibration file.
-        nitrate_col (str, optional): Column name for raw nitrate concentration. Default is 'NitrateConcentration[uM]'.
-        dark_col (str, optional): Column name for dark value used in fit. Default is 'DarkValueUsedForFit'.
-
+        nitrate_col (str, optional): Column name for raw nitrate concentration.
+        dark_col (str, optional): Column name for dark value used in fit.
     Returns:
-        np.array: Corrected nitrate concentrations.
+        np.ndarray: Corrected nitrate concentrations.
     """
     df[nitrate_col] = pd.to_numeric(df[nitrate_col], errors='coerce')
-
-    # Define calibration directory
-    cal_dir = 'suna_calibration'
-    spec_path = os.path.join(cal_dir, 'spec.mat')
-
+    # Package data directory: src/stingray/data_reference/
+    pkg_dir = Path(__file__).resolve().parent
+    data_ref_dir = pkg_dir / "data_reference"
+    spec_path = data_ref_dir / "spec.mat"
+    hdr_file = data_ref_dir / "suna_hdr.txt"
+    # Cruise-specific calibration files remain at repo-level
+    cal_dir = Path("suna_calibration")
     # Find the corresponding CAL file for the cruise
     try:
         cal_file = next(file for file in os.listdir(cal_dir) if CRUISE.upper() in file)
-        cal_path = os.path.join(cal_dir, cal_file)
+        cal_path = cal_dir / cal_file
     except StopIteration:
-        logging.info(f'No calibration file found for cruise {CRUISE}, using raw nitrate values.')
+        logging.info(f"No calibration file found for cruise {CRUISE}, using raw nitrate values.")
         df.loc[df[dark_col] == 0, nitrate_col] = np.nan
         return df[nitrate_col].to_numpy()
-
     # Ensure required lines in CAL file
-    cal_path = check_lines(cal_path, 'AP')
-
+    cal_path = Path(check_lines(str(cal_path), 'AP'))
     # Load SPEC and CAL data
-    spec = parse_mat(spec_path)
-    ncal = parse_SOSIK_NO3cal(cal_path)
-
+    spec = parse_mat(str(spec_path))
+    ncal = parse_SOSIK_NO3cal(str(cal_path))
     # Get UV spectrum headers
-    hdr_file = os.path.join(cal_dir, 'suna_hdr.txt')
     with open(hdr_file, 'r') as file:
         nitrate_hdr = file.readline().strip().split(',')
-
     # Extract UV spectrum column names
     uv_cols = [col for col in df.columns if re.search(r'SpectrumCh', col)]
     uv_list = [col for col in nitrate_hdr if re.search(r'UV\(\d+(\.\d+)?\)', col)]
-
     # Rename spectrum columns for consistency
     df.rename(columns=dict(zip(uv_cols, uv_list)), inplace=True)
-
     # Drop rows with missing nitrate values
     df[uv_list] = df[uv_list].apply(pd.to_numeric, errors='coerce')
     df.dropna(subset=[nitrate_col], inplace=True)
     df.reset_index(drop=True, inplace=True)
-
     # Prepare data for correction
-    spec['STP'] = [df['Salinity'].to_numpy(), df['Temperature'].to_numpy(), df['Pressure'].to_numpy()]
+    spec['STP'] = [
+        df['Salinity'].to_numpy(),
+        df['Temperature'].to_numpy(),
+        df['Pressure'].to_numpy(),
+    ]
     spec['UV_INTEN'] = df[uv_list].to_numpy(dtype=float)
-    spec['DC'] = np.outer(df[dark_col], np.ones(len(uv_list)))  # Create a dark current matrix
-    spec['NO3'] = df[nitrate_col].to_numpy()  # Raw SUNA-measured nitrate concentration
+    spec['DC'] = np.outer(df[dark_col], np.ones(len(uv_list)))
+    spec['NO3'] = df[nitrate_col].to_numpy()
     spec['SDN'] = df['matdate'].to_numpy()
-
     # Define spectral wavelength range from calibration
     spec['spectra_WL_range'][0][0] = ncal['WL'][0]
     spec['spectra_WL_range'][0][1] = ncal['WL'][-1]
-
     # Perform nitrate correction calculation
     out = calc_bofu_no3(spec, ncal, pcor_flag=1)
-
     # Apply filtering: Set values to NaN where dark value mask is zero
     dv_mask = out['data'][:, 1] == 0
     out['data'][dv_mask, 6] = np.nan
-
-    logging.info(f'Calibration file found for cruise {CRUISE}, TSP correction applied.')
+    logging.info(f"Calibration file found for cruise {CRUISE}, TSP correction applied.")
     return out['data'][:, 6]
 
 # Convert GPS
@@ -996,32 +990,27 @@ def mid2range(midpoints):
     return np.array(ranges)
 
 # Function to read a single file
-def read_file(filename, hdr = None):
+def read_file(filename, hdr=None):
     try:
-        if hdr == True:
-            hdr = open('suna_hdr.txt').readlines()[0].strip().split(',')
-        # Read file efficiently and process the necessary columns
+        if hdr is True:
+            data_ref_dir = Path(__file__).resolve().parent / "data_reference"
+            hdr_path = data_ref_dir / "suna_hdr.txt"
+            with open(hdr_path, "r") as f:
+                hdr = f.readline().strip().split(",")
         temp = pd.read_csv(filename, skiprows=14, header=None)
-
-        # Process only the necessary columns and optimize the DataFrame creation
         lhs = pd.DataFrame({
             0: pd.Series([float('nan')] * len(temp), dtype='float64'),
-            1: rawdate2date(temp.iloc[:, 1]),  # Convert dates
-            2: rawtime2time(temp.iloc[:, 2])   # Convert times
+            1: rawdate2date(temp.iloc[:, 1]),
+            2: rawtime2time(temp.iloc[:, 2])
         })
-
-        # Concatenate lhs and rhs
-        rhs = temp.iloc[:, 3:-6].copy()  # Copy relevant part of temp
+        rhs = temp.iloc[:, 3:-6].copy()
         df = pd.concat([lhs, rhs], axis=1)
-
-        # Set column names more efficiently
         if hdr:
             df.columns = hdr[:-8]
         return df
-    
     except Exception as e:
         logging.info(f"Failed to read {filename}: {e}")
-        return pd.DataFrame() 
+        return pd.DataFrame()
     
 ## Joe Futrelle get nearest stations
 def get_cruise_stations(cruise):
