@@ -15,6 +15,7 @@ from plotly.colors import sample_colorscale
 # 🔹 Global Constants
 # ============================================
 DEFAULT_SUBSAMPLE = 3
+DEFAULT_MAX_TIME_GAP_SEC = 300  # 5 minutes; tune per platform
 MAX_WORKERS = min(os.cpu_count() - 1, 8)
 
 WORK_DIR = Path("/dash_data") if Path("/dash_data").is_dir() else Path("dash_data")
@@ -31,7 +32,10 @@ FILE_TIMESTAMP = {}
 CSV_HEADER_CACHE = {}
 TS_CONTOUR_CACHE = {}
 SENSOR_VAR_CACHE = {}
-
+MAX_DATA_CACHE = 8
+AVERAGE_CACHE = {}
+MAX_AVG_CACHE = 8
+    
 # ============================================
 # 🔹 Units dictionary
 # ============================================
@@ -169,37 +173,124 @@ def dynamic_ticks(vmin, vmax, nticks=6):
 # ============================================
 # 🔹 Main Data Loader with Smart Caching
 # ============================================
-def load_data(dataset: str, file_name: str, sub_sample: int = 1):
-    """
-    Load, clean, and optionally sub-sample a dataset.
-    - Keeps essential cleaning (datetime, numeric, coordinate limits, media columns)
-    - Adds a stable point_id if missing
-    - No overcomplicated cache or timestamp tracking
-    """
+def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample"):
     dataset_path = DATA_DIR / dataset
     csv_path = dataset_path / f"{file_name}.csv"
     if not csv_path.exists():
         return pd.DataFrame()
     base_key = f"{dataset}/{file_name}"
+    # =========================================================
+    # 1️⃣ RAW DATA CACHE
+    # =========================================================
     if base_key not in DATA_CACHE:
         df = pd.read_csv(csv_path, low_memory=False)
-        # Convert numeric columns to float32 to reduce memory + WebGL transfer
-        float_cols = df.select_dtypes(include=["float64"]).columns
-        df[float_cols] = df[float_cols].astype(np.float32)
-        # Convert integers to int32
+        # downcast for memory efficiency
         int_cols = df.select_dtypes(include=["int64"]).columns
-        df[int_cols] = df[int_cols].astype(np.int32)
+        for col in int_cols:
+            s = df[col]
+            if s.min() >= np.iinfo(np.int32).min and s.max() <= np.iinfo(np.int32).max:
+                df[col] = s.astype(np.int32)
         if "point_id" not in df.columns:
-            df["point_id"] = np.arange(len(df))
+            df = df.assign(point_id=np.arange(len(df), dtype=np.int32))
+        df = df.copy()
         df = df.set_index("point_id", drop=False)
         if "times" in df.columns:
             df["times"] = pd.to_datetime(df["times"], errors="coerce")
+        if len(DATA_CACHE) >= MAX_DATA_CACHE:
+            DATA_CACHE.pop(next(iter(DATA_CACHE)))
         DATA_CACHE[base_key] = df
-    cache_key = f"{dataset}/{file_name}/{sub_sample}"
-    if cache_key not in DATA_CACHE:
-        DATA_CACHE[cache_key] = DATA_CACHE[base_key].iloc[::sub_sample]
-    return DATA_CACHE[cache_key]
+    df = DATA_CACHE[base_key]
+    # =========================================================
+    # 2️⃣ NO SAMPLING
+    # =========================================================
+    if sub_sample <= 1:
+        return df
+    # =========================================================
+    # 3️⃣ SUBSAMPLE MODE
+    # =========================================================
+    if mode == "subsample":
+        return df.iloc[::sub_sample]
+    # =========================================================
+    # 4️⃣ AVERAGE MODE WITH CACHE
+    # =========================================================
+    if mode == "average":
+        max_gap = getattr(load_data, "_max_gap_seconds", DEFAULT_MAX_TIME_GAP_SEC)
+        avg_key = f"{base_key}/{sub_sample}/{max_gap}"
+        if avg_key in AVERAGE_CACHE:
+            return AVERAGE_CACHE[avg_key]
+        n = len(df)
+        if n == 0:
+            return df
+        # -----------------------------------------------------
+        # 1️⃣ Build segment IDs (deployment-aware if available)
+        # -----------------------------------------------------
+        if "deployment" in df.columns:
+            # Use precomputed deployment segmentation
+            seg = df["deployment"].to_numpy(np.int64)
+            new_segment = np.zeros(n, dtype=bool)
+            new_segment[0] = True
+            new_segment[1:] = seg[1:] != seg[:-1]
 
+        elif "times" in df.columns and not df["times"].isna().all():
+            # Fallback to time-gap segmentation
+            dt = df["times"].diff().dt.total_seconds().to_numpy()
+            new_segment = np.zeros(n, dtype=bool)
+            new_segment[0] = True
+            new_segment[1:] = (dt[1:] > max_gap) | np.isnan(dt[1:])
+            seg = np.cumsum(new_segment)
+
+        else:
+            # No time and no deployment → treat entire dataset as one segment
+            seg = np.zeros(n, dtype=np.int64)
+            new_segment = np.zeros(n, dtype=bool)
+            new_segment[0] = True
+        # -----------------------------------------------------
+        # 2️⃣ Compute index within each segment
+        # -----------------------------------------------------
+        seg_start_idx = np.where(new_segment, np.arange(n), 0)
+        seg_start_idx = np.maximum.accumulate(seg_start_idx)
+        idx_in_seg = np.arange(n) - seg_start_idx
+        # -----------------------------------------------------
+        # 3️⃣ Compute full-bin mask (discard short bins)
+        # -----------------------------------------------------
+        seg_sizes = np.bincount(seg)
+        row_seg_size = seg_sizes[seg]
+        full_bins = row_seg_size // sub_sample
+        bin_index = idx_in_seg // sub_sample
+        valid_mask = bin_index < full_bins
+        if not np.any(valid_mask):
+            return pd.DataFrame()
+        # -----------------------------------------------------
+        # 4️⃣ Build groups only for valid rows
+        # -----------------------------------------------------
+        groups = seg * (n + 1) + bin_index
+        dfo = df.loc[valid_mask].copy()
+        dfo["_group"] = groups[valid_mask]
+        # -----------------------------------------------------
+        # 5️⃣ Aggregate
+        # -----------------------------------------------------
+        numeric_cols = [
+            c for c in dfo.select_dtypes(include=[np.number]).columns
+            if c not in ("point_id", "_group")
+        ]
+        meta_cols = [
+            c for c in dfo.columns
+            if c not in numeric_cols and c not in ("point_id", "_group")
+        ]
+        grouped = dfo.groupby("_group", sort=False)
+        avg_num = grouped[numeric_cols].mean()
+        avg_meta = grouped[meta_cols].first()
+        out = pd.concat([avg_meta, avg_num], axis=1).reset_index(drop=True)
+        out["point_id"] = np.arange(len(out), dtype=np.int32)
+        out = out.set_index("point_id", drop=False)
+        # -----------------------------------------------------
+        # 6️⃣ Cache
+        # -----------------------------------------------------
+        if len(AVERAGE_CACHE) >= MAX_AVG_CACHE:
+            AVERAGE_CACHE.pop(next(iter(AVERAGE_CACHE)))
+        AVERAGE_CACHE[avg_key] = out
+        return out
+    
 # ============================================
 # 🔹 CLI Interface
 # ============================================
@@ -247,6 +338,7 @@ if bathy is not None:
 app.layout = html.Div([
     # --- URL Sync ---
     dcc.Location(id='url', refresh=False),
+    dcc.Store(id="url_restore_done", data=False),
     # --- Auto file scanner ---
     dcc.Interval(id="file-scan-interval", interval=600 * 1000, n_intervals=0),
     dcc.Store(id="file-snapshot", data={}),
@@ -449,8 +541,24 @@ app.layout = html.Div([
             html.Div([
                 html.Label('OTHER OPTIONS:', className='section-label'),
                 html.Div([
-                    html.Label('Sub-sampling:'),
+                    html.Label('Sampling mode:'),
+                    dcc.Dropdown(
+                        id='sampling_mode',
+                        options=[
+                            {'label':'Subsample','value':'subsample'},
+                            {'label':'Average bins','value':'average'}
+                        ],
+                        value='subsample',
+                        clearable=False
+                    )
+                ]),
+                html.Div([
+                    html.Label('Bin size (N points):'),
                     dcc.Input(id='sub_sample', type='number', value=DEFAULT_SUBSAMPLE, debounce=True)
+                ]),
+                html.Div([
+                    html.Label('Max time gap for averaging (sec):'),
+                    dcc.Input(id='max_gap_seconds', type='number', value=DEFAULT_MAX_TIME_GAP_SEC, debounce=True)
                 ]),
                 html.Div([
                     html.Label('Opacity:'),
@@ -533,77 +641,126 @@ app.layout = html.Div([
 
 # Define which UI parameters should be mirrored in the URL
 URL_SYNCED_PARAMS = [
-    {"key": "dataset",   "id": "csv_selector",   "default": None,          "type": "string"},
-    {"key": "variable",  "id": "color_variable", "default": "temperature", "type": "string"},
-    {"key": "colormap",  "id": "color_map",      "default": "Jet",         "type": "string"},
-    {"key": "zmin",      "id": "z_min",          "default": 0,             "type": "float"},
-    {"key": "zmax",      "id": "z_max",          "default": 200,           "type": "float"},
-    {"key": "opacity",   "id": "hidden_opacity", "default": 0.05,          "type": "float"},
-    {"key": "subsample", "id": "sub_sample",     "default": 3,             "type": "int"},
+    {"key": "dataset",   "id": "dataset_selector", "default": None,          "type": "string"},
+    {"key": "file",      "id": "csv_selector",     "default": None,          "type": "string"},
+    {"key": "variable",  "id": "color_variable",   "default": "temperature", "type": "string"},
+    {"key": "colormap",  "id": "color_map",        "default": "Jet",         "type": "string"},
+    {"key": "zmin",      "id": "z_min",            "default": 0,             "type": "float"},
+    {"key": "zmax",      "id": "z_max",            "default": 200,           "type": "float"},
+    {"key": "opacity",   "id": "hidden_opacity",   "default": 0.05,          "type": "float"},
+    {"key": "subsample", "id": "sub_sample",       "default": 3,             "type": "int"},
 ]
-
 
 # --- Callback: Update URL query string based on current UI state ---
 @app.callback(
     Output("url", "search"),
     [Input(p["id"], "value") for p in URL_SYNCED_PARAMS],
+    State("url", "search"),
+    State("url_restore_done", "data"),
     prevent_initial_call=True
 )
-def update_url(*values):
-    """Synchronize key UI parameters with the browser URL."""
-    params = {
+def update_url(*args):
+    *values, current_search, restore_done = args
+    # Do not write URL while initial restore is still happening
+    if not restore_done:
+        return no_update
+    current_values = {
         p["key"]: val for p, val in zip(URL_SYNCED_PARAMS, values)
-        if val not in [None, "", []]
     }
-    return f"?{urlencode(params)}" if params else ""
-
+    dataset = current_values.get("dataset")
+    file_name = current_values.get("file")
+    # only dataset and file are required
+    if not dataset or not file_name:
+        return no_update
+    existing_params = parse_qs(urlparse(current_search or "").query)
+    # preserve unrelated params
+    params = {
+        k: v[0] for k, v in existing_params.items()
+        if k not in {p["key"] for p in URL_SYNCED_PARAMS}
+    }
+    # always write required params
+    params["dataset"] = str(dataset)
+    params["file"] = str(file_name)
+    # optional params:
+    # include only if not empty and not default
+    for p in URL_SYNCED_PARAMS:
+        key = p["key"]
+        if key in ("dataset", "file"):
+            continue
+        val = current_values.get(key)
+        default = p.get("default")
+        if val in (None, "", []):
+            params.pop(key, None)
+        elif val == default:
+            params.pop(key, None)
+        else:
+            params[key] = str(val)
+    new_search = f"?{urlencode(params)}"
+    if new_search == (current_search or ""):
+        return no_update
+    return new_search
 
 # --- Callback: Restore UI state from URL query string ---
 @app.callback(
-    [
-        Output(p["id"], "value", allow_duplicate=True)
-        for p in URL_SYNCED_PARAMS
-    ],
+    [Output(p["id"], "value", allow_duplicate=True) for p in URL_SYNCED_PARAMS] +
+    [Output("url_restore_done", "data", allow_duplicate=True)],
     Input("url", "search"),
-    Input("csv_selector", "options"),  # wait until dataset options loaded
     prevent_initial_call="initial_duplicate",
 )
-def restore_from_url(search, csv_options):
-    """Restore UI element values from URL parameters."""
-    csv_files = [opt["value"] for opt in (csv_options or [])]
-    defaults = {
-        p["key"]: (
-            csv_files[-1] if p["key"] == "dataset" and csv_files else p["default"]
-        )
-        for p in URL_SYNCED_PARAMS
-    }
-    if not search:
-        return [defaults[p["key"]] for p in URL_SYNCED_PARAMS]
-    params = parse_qs(urlparse(search).query)
+def restore_from_url(search):
+    datasets = scan_datasets()
+    # parse URL first
+    params = parse_qs(urlparse(search or "").query)
+    # --- resolve dataset first ---
+    dataset_default = datasets[-1] if datasets else None
+    dataset_val = params.get("dataset", [dataset_default])[0]
+    if dataset_val not in datasets:
+        dataset_val = dataset_default
+    # --- resolve file against the resolved dataset ---
+    csv_files = get_csv_files(dataset_val) if dataset_val else []
+    file_default = csv_files[-1] if csv_files else None
+    file_val = params.get("file", [file_default])[0]
+    if file_val not in csv_files:
+        file_val = file_default
+    # defaults for the remaining params
+    defaults = {}
+    for p in URL_SYNCED_PARAMS:
+        if p["key"] == "dataset":
+            defaults["dataset"] = dataset_val
+        elif p["key"] == "file":
+            defaults["file"] = file_default
+        else:
+            defaults[p["key"]] = p["default"]
     results = []
     for p in URL_SYNCED_PARAMS:
         key, typ = p["key"], p["type"]
-        val = params.get(key, [defaults[key]])[0]
-        # --- type casting ---
-        if typ in ("int", "float"):
-            try:
-                val = int(val) if typ == "int" else float(val)
-            except (ValueError, TypeError):
-                val = defaults[key]
-        # --- ensure dataset exists ---
-        if key == "dataset" and val not in csv_files:
-            val = defaults[key]
+        if key == "dataset":
+            val = dataset_val
+        elif key == "file":
+            val = file_val
+        else:
+            val = params.get(key, [defaults[key]])[0]
+            if typ in ("int", "float"):
+                try:
+                    val = int(val) if typ == "int" else float(val)
+                except (ValueError, TypeError):
+                    val = defaults[key]
         results.append(val)
-    return results
+    return results + [True]
 
 # --- Callback: Refresh available dataset list ---
 @app.callback(
     Output("dataset_selector", "options"),
+    Output("dataset_selector", "value"),
     Input("file-scan-interval", "n_intervals"),
+    State("dataset_selector", "value"),
 )
-def refresh_dataset_list(_):
+def refresh_dataset_list(_, current_value):
     ds = scan_datasets()
-    return [{'label': f, 'value': f} for f in ds]
+    options = [{'label': f, 'value': f} for f in ds]
+    if current_value in ds:
+        return options, current_value
+    return options, (ds[-1] if ds else None)
 
 # --- Callback: Refresh available CSV file list ---
 @app.callback(
@@ -611,27 +768,31 @@ def refresh_dataset_list(_):
     Output("csv_selector", "value"),
     Input("dataset_selector", "value"),
     Input("refresh-button", "n_clicks"),
+    State("csv_selector", "value"),
+    State("url", "search"),
 )
-def update_csv_files(dataset, n_clicks):
-    # Case 1: No dataset selected → nothing to load
+def update_csv_files(dataset, n_clicks, current_value, search):
     if not dataset:
         return [], None
-    triggered = ctx.triggered_id  # dash context
-    # Case 2: Refresh button pressed → clear cache
-    if triggered == "refresh-button":
-        global DATA_CACHE, CURRENT_FILE
+    triggered = ctx.triggered_id
+    if triggered in ("refresh-button", "dataset_selector"):
+        global DATA_CACHE, AVERAGE_CACHE, CURRENT_FILE
         DATA_CACHE.clear()
+        AVERAGE_CACHE.clear()
         CURRENT_FILE = None
-    # Case 3: Load CSV list for selected dataset
     csv_files = get_csv_files(dataset)
-    options = [{'label': f, 'value': f} for f in csv_files]
-    value = csv_files[-1] if csv_files else None
-    return options, value
+    options = [{"label": f, "value": f} for f in csv_files]
+    params = parse_qs(urlparse(search or "").query)
+    url_file = params.get("file", [None])[0]
+    if url_file in csv_files:
+        return options, url_file
+    if current_value in csv_files:
+        return options, current_value
+    return options, (csv_files[-1] if csv_files else None)
 
 # ============================================================
 # === Color Variable and Range Management ===
 # ============================================================
-# --- Callback: Update color-variable dropdowns when CSV changes ---
 @app.callback(
     [
         Output('color_variable', 'options'),
@@ -646,12 +807,14 @@ def update_csv_files(dataset, n_clicks):
     State('color_variable', 'value'),
     State('ts_color_variable', 'value'),
     State('profile_variable', 'value'),
+    State('url', 'search'),
     prevent_initial_call=True
 )
 def update_color_variable_options(dataset, csv_file,
                                   current_color,
                                   current_ts_color,
-                                  current_profile_var):
+                                  current_profile_var,
+                                  search):
     if not csv_file:
         return [], None, [], None, [], None
     csv_path = DATA_DIR / dataset / f"{csv_file}.csv"
@@ -666,8 +829,19 @@ def update_color_variable_options(dataset, csv_file,
     sensor_vars = SENSOR_VAR_CACHE[csv_path]
     options = [{'label': v.capitalize(), 'value': v} for v in sensor_vars]
     default = sensor_vars[0] if sensor_vars else None
-    color_val = current_color if current_color in sensor_vars else default
-    ts_val = current_ts_color if current_ts_color in sensor_vars else default
+    params = parse_qs(urlparse(search or "").query)
+    url_color = params.get("variable", [None])[0]
+    if url_color in sensor_vars:
+        color_val = url_color
+    elif current_color in sensor_vars:
+        color_val = current_color
+    else:
+        color_val = default
+    ts_candidates = [v for v in sensor_vars if v not in ['temperature', 'salinity']]
+    if current_ts_color in ts_candidates:
+        ts_val = current_ts_color
+    else:
+        ts_val = ts_candidates[0] if ts_candidates else None
     profile_val = current_profile_var if current_profile_var in sensor_vars else default
     return options, color_val, options, ts_val, options, profile_val
 
@@ -794,13 +968,21 @@ def apply_manual_layout(trw, trh, mw, mh, tsw, tsh, pw, ph):
     Input("cruise_track_xaxis", "value"),
     Input("cruise_track_yaxis", "value"),
     Input("plot_font_size", "value"),
-    State("sub_sample", "value"),
+    Input("sub_sample", "value"),
+    Input("sampling_mode", "value"),
     prevent_initial_call=True,
 )
-def draw_cruise_track(dataset, csv_file, xaxis, yaxis, fontsize, sub_sample):
+def draw_cruise_track(dataset, csv_file, xaxis, yaxis, fontsize, sub_sample, sampling_mode):
     trigger = ctx.triggered_id
-    # 🧱 ignore redraws unless the trigger is one of these:
-    if trigger not in ("csv_selector", "cruise_track_xaxis", "cruise_track_yaxis", "plot_font_size"):
+    if trigger not in (
+        "dataset_selector",   # add this
+        "csv_selector",
+        "cruise_track_xaxis",
+        "cruise_track_yaxis",
+        "plot_font_size",
+        "sub_sample",
+        "sampling_mode"
+    ):
         raise dash.exceptions.PreventUpdate
     if not csv_file:
         fig = go.Figure()
@@ -811,15 +993,15 @@ def draw_cruise_track(dataset, csv_file, xaxis, yaxis, fontsize, sub_sample):
             showarrow=False
         )
         return fig
-    df = load_data(dataset, csv_file, sub_sample=sub_sample)
+    df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
     fig = go.Figure()
     fig.add_trace(go.Scattergl(
         x=df[xaxis],
         y=df[yaxis],
         mode="markers",
         marker=dict(size=5, color="blue"),
-        meta=df["point_id"].astype(int).tolist(),  # <-- meta always survives
-        customdata=df["point_id"].astype(int).to_numpy().reshape(-1,1)
+        meta=df["point_id"].astype(int).tolist(),
+        customdata=df["point_id"].astype(int).to_numpy().reshape(-1, 1)
     ))
     fig.update_traces(
         mode="markers",
@@ -829,7 +1011,6 @@ def draw_cruise_track(dataset, csv_file, xaxis, yaxis, fontsize, sub_sample):
     fig.update_layout(
         dragmode="select",
         selectdirection="any",
-        # newselection_mode="immediate",
         clickmode="select",
         uirevision="cruise-track",
         font=dict(size=fontsize if fontsize else 10),
@@ -861,30 +1042,29 @@ def draw_cruise_track(dataset, csv_file, xaxis, yaxis, fontsize, sub_sample):
     Input("cruise_track", "selectedData"),
     Input("dataset_selector", "value"),
     Input("csv_selector", "value"),
+    Input("sub_sample", "value"),
+    Input("sampling_mode", "value"),
     State("cruise_track_selection_store", "data"),
     prevent_initial_call=True,
 )
-def persist_cruise_track_selection(selectedData, dataset, csv_file, prev_data):
+def persist_cruise_track_selection(selectedData, dataset, csv_file, sub_sample, sampling_mode, prev):
     if not csv_file:
         raise dash.exceptions.PreventUpdate
-    df = load_data(dataset, csv_file)
+    prev = prev or {}
     trigger = ctx.triggered_id
-    # Reset when dataset changes
-    if trigger in ("csv_selector", "dataset_selector"):
-        return {"selected_ids": df["point_id"].astype(int).tolist()}
-    # User selection
-    if trigger == "cruise_track" and selectedData and selectedData.get("points"):
-        selected_ids = [
-            int(p["meta"])
-            for p in selectedData["points"]
-            if p.get("meta") is not None
-        ]
-        if not selected_ids:
-            return {"selected_ids": df["point_id"].astype(int).tolist()}
-        return {"selected_ids": selected_ids}
-    # Double-click reset
-    if trigger == "cruise_track" and selectedData is None:
-        return {"selected_ids": df["point_id"].astype(int).tolist()}
+    # If dataset/file actually changed (not just a URL rewrite), reset to all ids
+    last_key = prev.get("_key")
+    this_key = f"{dataset}/{csv_file}/{sub_sample}/{sampling_mode}"
+    if trigger in ("dataset_selector", "csv_selector", "sub_sample", "sampling_mode"):
+        if last_key == this_key:
+            return prev  # no real change → keep selection
+        df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
+        return {"selected_ids": df.index.astype(int).tolist(), "_key": this_key}
+    if trigger == "cruise_track":
+        if not selectedData or not selectedData.get("points"):
+            raise dash.exceptions.PreventUpdate
+        ids = [int(p["meta"]) for p in selectedData["points"] if p.get("meta") is not None]
+        return {"selected_ids": ids, "_key": this_key}
     raise dash.exceptions.PreventUpdate
 
 # --- Callback: Mirror selections between main scatter and TS plots ---
@@ -929,16 +1109,17 @@ def mirror_selection(scatter_sel, ts_sel, fig_scatter, fig_ts):
             if p.get("customdata") is not None
         }
     # --- Apply selection to both figures ---
+    ids = np.asarray(list(selected_ids), dtype=np.int32)
     for fig, patch in [(fig_scatter, patched_scatter), (fig_ts, patched_ts)]:
         for i, trace in enumerate(fig.get("data", [])):
             if "customdata" not in trace:
                 continue
-            custom_ids = trace["customdata"]
-            selected_idx = [
-                j for j, pid in enumerate(custom_ids)
-                if pid in selected_ids
-            ]
-            patch["data"][i]["selectedpoints"] = selected_idx or None
+            custom_ids = np.asarray(trace["customdata"], dtype=np.int32)
+            mask = np.isin(custom_ids, ids)
+            selected_idx = np.nonzero(mask)[0]
+            patch["data"][i]["selectedpoints"] = (
+                selected_idx.tolist() if len(selected_idx) else None
+            )
     return patched_scatter, patched_ts
 
 # --- Callback: Store selected IDs from main plot (for cross-plot filtering) ---
@@ -1008,6 +1189,7 @@ def track_range_change(lat_min, lat_max, ymin, ymax,
         Input('dataset_selector', 'value'),
         Input('csv_selector', 'value'),
         Input('sub_sample', 'value'),
+        Input('sampling_mode', 'value'),
         Input('x_axis_variable', 'value'),
         Input('y_axis_variable', 'value'),
         Input('color_variable', 'value'),
@@ -1030,7 +1212,7 @@ def track_range_change(lat_min, lat_max, ymin, ymax,
         Input('main_plot', 'relayoutData'),
     ]
 )
-def update_main_plot(dataset, csv_file, sub_sample,
+def update_main_plot(dataset, csv_file, sub_sample, sampling_mode,
                      x_axis, y_axis, color_var, color_map, size, vmin, vmax,
                      zmin, zmax, lat_min, lat_max, lon_min, lon_max,
                      hidden_opacity, fontsize, bathymetry, station,
@@ -1041,35 +1223,29 @@ def update_main_plot(dataset, csv_file, sub_sample,
     trigger = ctx.triggered_id
     if trigger == "main_plot" and relayoutData:
         valid_relayout = any(
-            k.startswith("xaxis.range") or
-            k.startswith("yaxis.range") or
-            k.endswith(".autorange")
-            for k in relayoutData.keys()
+            k.startswith("xaxis.range")
+            or k.startswith("yaxis.range")
+            or "autorange" in k
+            for k in relayoutData
         )
         if not valid_relayout:
             raise dash.exceptions.PreventUpdate
     if not csv_file:
-        return (
-            go.Figure().add_annotation(
-                text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False
-            ),
-            []
-        )
-    df = load_data(dataset, csv_file, sub_sample=sub_sample)
+        return go.Figure().add_annotation(text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False)
+    df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
     # --------------------------------------------------------
     # 2️⃣ Apply Cruise Track Selection
     # --------------------------------------------------------
     if cruise_track_selection and "selected_ids" in cruise_track_selection:
-        df = df[df["point_id"].isin(cruise_track_selection["selected_ids"])]
+        ids = np.asarray(cruise_track_selection["selected_ids"], dtype=np.int32)
+        mask = np.isin(df["point_id"].to_numpy(), ids)
+        df = df.loc[mask]
     if df.empty:
-        return (
-            go.Figure().add_annotation(
+        return go.Figure().add_annotation(
                 text=f"⚠️ No {color_var} data available",
                 x=0.5, y=0.5, xref="paper", yref="paper",
                 showarrow=False, font=dict(size=16, color="red")
-            ),
-            []
-        )
+            )
     # --------------------------------------------------------
     # 3️⃣ Configure Color Scale
     # --------------------------------------------------------
@@ -1128,7 +1304,10 @@ def update_main_plot(dataset, csv_file, sub_sample,
     # X AXIS
     # =========================
     xticks = xticktext = None
-    if x_axis in df.columns:
+    if x_axis == "times":
+        x_range = [df["times"].min(), df["times"].max()]
+        xticks = xticktext = None
+    elif x_axis in df.columns:
         xmin, xmax = resolve_range(
             x_axis,
             visible_xrange,
@@ -1151,9 +1330,6 @@ def update_main_plot(dataset, csv_file, sub_sample,
             x_range = [xmin, xmax]
         else:
             x_range = [xmin, xmax]
-    elif x_axis == "times":
-        x_range = [df["times"].min(), df["times"].max()]
-        xticks = xticktext = None
     else:
         x_range = xticks = xticktext = None
     # =========================
@@ -1341,6 +1517,7 @@ def update_main_plot(dataset, csv_file, sub_sample,
         Input('dataset_selector', 'value'),
         Input('csv_selector', 'value'),
         Input('sub_sample', 'value'),
+        Input('sampling_mode', 'value'),
         Input('ts_color_variable', 'value'),
         Input('ts_color_map', 'value'),
         Input('ts_v_min', 'value'),
@@ -1350,7 +1527,7 @@ def update_main_plot(dataset, csv_file, sub_sample,
         Input('cruise_track_selection_store', 'data'),
     ]
 )
-def update_ts_plot(dataset, csv_file, sub_sample,
+def update_ts_plot(dataset, csv_file, sub_sample, sampling_mode,
                    color_var, color_map, vmin, vmax,
                    hidden_opacity, fontsize, cruise_track_selection):
     # --------------------------------------------------------
@@ -1360,7 +1537,7 @@ def update_ts_plot(dataset, csv_file, sub_sample,
         return go.Figure().add_annotation(
             text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False
         )
-    df = load_data(dataset, csv_file, sub_sample=sub_sample)
+    df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
     if 'temperature' not in df.columns or 'salinity' not in df.columns:
         return go.Figure().add_annotation(
             text="⚠️ Temperature or Salinity data missing",
@@ -1377,7 +1554,9 @@ def update_ts_plot(dataset, csv_file, sub_sample,
     # 2️⃣ Apply Cruise Track Selection
     # --------------------------------------------------------
     if cruise_track_selection and "selected_ids" in cruise_track_selection:
-        df = df[df["point_id"].isin(cruise_track_selection["selected_ids"])]
+        ids = np.asarray(cruise_track_selection["selected_ids"], dtype=np.int32)
+        mask = np.isin(df["point_id"].to_numpy(), ids)
+        df = df.loc[mask]
     # --------------------------------------------------------
     # 3️⃣ Handle Empty Data
     # --------------------------------------------------------
@@ -1534,6 +1713,7 @@ def update_ts_plot(dataset, csv_file, sub_sample,
         Input('dataset_selector', 'value'),
         Input('csv_selector', 'value'),
         Input('sub_sample', 'value'),
+        Input('sampling_mode', 'value'),
         Input('profile_variable', 'value'),   
         Input('profile_color_map', 'value'),
         Input('plot_font_size', 'value'),   
@@ -1541,7 +1721,7 @@ def update_ts_plot(dataset, csv_file, sub_sample,
         Input('cruise_track_selection_store', 'data'),
     ]
 )
-def update_profile_plot(dataset, csv_file, sub_sample,
+def update_profile_plot(dataset, csv_file, sub_sample, sampling_mode,
                         color_var, color_map, fontsize, selected_data, cruise_track_selection):
     """
     Update the vertical profile plot (Depth vs. Selected Variable).
@@ -1558,7 +1738,7 @@ def update_profile_plot(dataset, csv_file, sub_sample,
     if not csv_file:
         fig.add_annotation(text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False)
         return fig
-    df = load_data(dataset, csv_file, sub_sample=sub_sample)
+    df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
     if not color_var or color_var not in df.columns:
         fig.add_annotation(
             text="⚠️ No variable selected",
@@ -1570,23 +1750,29 @@ def update_profile_plot(dataset, csv_file, sub_sample,
     # 2️⃣ Apply Cruise Track Selection (Primary Filter)
     # --------------------------------------------------------
     if cruise_track_selection and "selected_ids" in cruise_track_selection:
-        df = df[df["point_id"].isin(cruise_track_selection["selected_ids"])]
+        ids = np.asarray(cruise_track_selection["selected_ids"], dtype=np.int32)
+        mask = np.isin(df["point_id"].to_numpy(), ids)
+        df = df.loc[mask]
     # --------------------------------------------------------
     # 3️⃣ Expand scatter selection → full profiles OR subset
     # --------------------------------------------------------
     if selected_data and "selected_ids" in selected_data:
-        selected_ids = set(selected_data["selected_ids"])
-        if 'cast' in df.columns:
+        ids = np.asarray(selected_data["selected_ids"], dtype=np.int32)
+        if "cast" in df.columns:
+            # find which casts contain selected points
+            mask = np.isin(df.index.values, ids)
             selected_profiles = (
-                df.loc[df["point_id"].isin(selected_ids), "cast"]
+                df.loc[mask, "cast"]
                 .dropna()
                 .unique()
             )
             if len(selected_profiles):
-                df = df[df["cast"].isin(selected_profiles)]
+                cast_mask = np.isin(df["cast"].to_numpy(), selected_profiles)
+                df = df.loc[cast_mask]
         else:
-            # 🔥 No cast → subset directly by selected points
-            df = df[df["point_id"].isin(selected_ids)]
+            # no cast column → subset directly by selected points
+            mask = np.isin(df.index.values, ids)
+            df = df.loc[mask]
     # --------------------------------------------------------
     # 4️⃣ Clean bad values
     # --------------------------------------------------------
@@ -1733,8 +1919,10 @@ def update_profile_plot(dataset, csv_file, sub_sample,
     Input('main_plot', 'clickData'),
     State('dataset_selector', 'value'),
     State('csv_selector', 'value'),
+    State('sub_sample', 'value'),
+    State('sampling_mode', 'value'),
 )
-def display_click_data(clickData, dataset, csv_file):
+def display_click_data(clickData, dataset, csv_file, sub_sample, sampling_mode):
     """
     Display detailed information about a clicked point in the main scatter plot.
     Uses point_id to fetch the full row from the server instead of sending
@@ -1746,7 +1934,7 @@ def display_click_data(clickData, dataset, csv_file):
         # Get clicked point_id
         point_id = clickData["points"][0]["customdata"]
         # Load dataframe
-        df = load_data(dataset, csv_file)
+        df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
         # Retrieve full row
         if point_id not in df.index:
             return "Point no longer in filtered dataset."

@@ -1220,20 +1220,16 @@ def identify_profiles(
 ):
     """
     Identify CTD profiles (casts) from depth and time.
-
     This function segments a continuous depth time series into separate
     physical profiles (downcasts, upcasts, and separate deployments).
-
     The algorithm is designed to be robust to:
       - wire jitter and ship heave
       - short winch pauses
       - noisy depth measurements
       - small yo-yo motion near turning points
-
     It uses quantization + median smoothing BEFORE estimating direction,
     then detects real turnarounds with hysteresis, and enforces hard breaks
     on time gaps.
-
     Parameters
     ----------
     depth : 1D array of float
@@ -1263,7 +1259,6 @@ def identify_profiles(
     min_turn_time : float
         Minimum time (seconds) after the last extremum before confirming
         a turnaround. Prevents rapid oscillations from splitting profiles.
-
     Returns
     -------
     profile_out : 1D float array
@@ -1271,184 +1266,123 @@ def identify_profiles(
         Labels are contiguous integers starting at 0.
         NaN indicates samples that belong to invalid profiles with no valid
         neighbor to merge into.
+    deployment_id : 1D int array
+        Deployment labels for each sample.
+        Increments only across hard time gaps.
+        Not affected by turnaround logic or merging.
     """
-
     n = depth.size
-
     # -----------------------------
     # Step 0: Midpoint quantization (deadband / hysteresis in depth space)
     # -----------------------------
-    # Purpose:
-    #   - Remove small-scale depth noise (wire vibration, heave, sensor noise)
-    #   - Depth changes smaller than bin_size are collapsed to the same value
-    #
-    # Effect:
-    #   - Prevents tiny fluctuations from causing direction flips later
-    #
     depth_q = np.empty(n)
     half_bin = bin_size / 2.0
-
     for i in range(n):
         d = depth[i]
         if np.isnan(d):
             depth_q[i] = np.nan
         else:
-            # Midpoint rounding to nearest bin center
             depth_q[i] = np.floor((d + half_bin) / bin_size) * bin_size
-
     # -----------------------------
     # Step 1: Rolling median smoothing on quantized depth
     # -----------------------------
-    # Purpose:
-    #   - Suppress spikes and short glitches
-    #   - Remove high-frequency jitter before derivative-like operations
-    #
-    # This is intentionally done AFTER quantization, so that
-    # small bin-scale oscillations are completely flattened.
-    #
     smooth = np.empty(n)
     hw = smooth_window // 2
-
     for i in range(n):
         lo = max(0, i - hw)
         hi = min(n, i + hw + 1)
-
         buf = []
         for j in range(lo, hi):
             v = depth_q[j]
             if not np.isnan(v):
                 buf.append(v)
-
         if len(buf) == 0:
             smooth[i] = np.nan
         else:
             buf.sort()
             smooth[i] = buf[len(buf) // 2]
-
     # -----------------------------
     # Step 2: Direction estimate (upcast vs downcast)
     # -----------------------------
-    # Purpose:
-    #   - Estimate direction of motion using a coarse centered window
-    #   - +1  = descending (increasing depth)
-    #   - -1  = ascending  (decreasing depth)
-    #
-    # dir_window controls smoothness vs lag:
-    #   - larger window = more stable, more lag near turnarounds
-    #   - smaller window = more responsive, more sensitive to noise
-    #
     direction = np.zeros(n)
     direction[:] = np.nan
     half = dir_window // 2
-
     for i in range(half, n - half):
         prev_med = smooth[i - half]
         next_med = smooth[i + half]
-
         if np.isnan(prev_med) or np.isnan(next_med):
             continue
-
         d = next_med - prev_med
         if d > 0:
             direction[i] = 1
         elif d < 0:
             direction[i] = -1
-
     # -----------------------------
     # Step 3: Profile boundaries
     #         (hard gaps + physical turnarounds)
     # -----------------------------
-    # Two types of boundaries:
-    #   HARD boundary: time gap > max_gap_sec (new deployment)
-    #   SOFT boundary: real turnaround in depth direction
-    #
     profile = np.zeros(n, dtype=np.int64)
     hard_profile = np.zeros(n, dtype=np.bool_)
-
+    # NEW: deployment id (hard gaps only)
+    deployment_id = np.zeros(n, dtype=np.int64)
+    current_deployment = 0
+    deployment_id[0] = 0
     last_dir = 0.0
     last_extreme_depth = smooth[0]
     last_extreme_time = time_seconds[0]
     last_extreme_idx = 0
-
     for i in range(1, n):
-        # Hard boundary: physical deployment gap
         gap = (time_seconds[i] - time_seconds[i - 1]) > max_gap_sec
-
         if gap:
+            # Increment deployment
+            current_deployment += 1
+            deployment_id[i] = current_deployment
             new_pid = profile[i - 1] + 1
             profile[i] = new_pid
             hard_profile[new_pid] = True
-
-            # Reset turnaround state across physical breaks
             last_dir = 0.0
             last_extreme_depth = smooth[i]
             last_extreme_time = time_seconds[i]
             last_extreme_idx = i
             continue
-
-        # Default: inherit previous profile id
+        # Same deployment
+        deployment_id[i] = current_deployment
         profile[i] = profile[i - 1]
-
         d = direction[i]
         if np.isnan(d) or np.isnan(smooth[i]):
             continue
-
         dz = smooth[i] - last_extreme_depth
         dt = time_seconds[i] - last_extreme_time
-
-        # Initialize direction state on first valid slope
         if last_dir == 0:
             last_dir = d
             last_extreme_depth = smooth[i]
             last_extreme_time = time_seconds[i]
             last_extreme_idx = i
             continue
-
-        # Physical turnaround detection with hysteresis:
-        #   - direction must flip
-        #   - reversal must exceed min_turn_depth
-        #   - enough time must have passed since the last extremum
-        #
         if d != last_dir and abs(dz) >= min_turn_depth and dt >= min_turn_time:
             new_pid = profile[i - 1] + 1
-
-            # Retroactively split at the actual extremum
             for k in range(last_extreme_idx + 1, i + 1):
                 profile[k] = new_pid
-
-            # Reset state for the new cast
             last_dir = d
             last_extreme_depth = smooth[i]
             last_extreme_time = time_seconds[i]
             last_extreme_idx = i
         else:
-            # Track current extremum while moving monotonically
             if (last_dir > 0 and smooth[i] > last_extreme_depth) or \
                (last_dir < 0 and smooth[i] < last_extreme_depth):
                 last_extreme_depth = smooth[i]
                 last_extreme_time = time_seconds[i]
                 last_extreme_idx = i
-
     profile_out = profile.astype(np.float64)
-
     # -----------------------------
     # Step 4: Validate profiles + merge tiny noise segments
     # -----------------------------
-    # A profile is invalid if:
-    #   - it has too few unique depth bins
-    #   - OR it never reaches shallower than min_depth_threshold
-    #
-    # Invalid profiles are merged into the nearest previous valid profile,
-    # UNLESS they were created by a hard (time gap) boundary.
-    #
     max_pid = profile[-1] + 1
     is_valid = np.zeros(max_pid, dtype=np.bool_)
-
     for pid in range(max_pid):
         seen = 0
         last = np.nan
         min_depth = 1e20
-
         for i in range(n):
             if profile[i] == pid:
                 d = depth_q[i]
@@ -1458,20 +1392,15 @@ def identify_profiles(
                     if np.isnan(last) or d != last:
                         seen += 1
                         last = d
-
         is_valid[pid] = (seen >= min_samples) and (min_depth <= min_depth_threshold)
-
     for pid in range(max_pid):
-        # Never merge across time gaps
         if is_valid[pid] or hard_profile[pid]:
             continue
-
         prev_valid = -1
         for p in range(pid - 1, -1, -1):
             if is_valid[p]:
                 prev_valid = p
                 break
-
         if prev_valid >= 0:
             for i in range(n):
                 if profile[i] == pid:
@@ -1480,25 +1409,18 @@ def identify_profiles(
             for i in range(n):
                 if profile[i] == pid:
                     profile_out[i] = np.nan
-
     # -----------------------------
     # Step 5: Relabel profiles contiguously
     # -----------------------------
-    # After merging, profile ids may be non-contiguous.
-    # This remaps them to 0, 1, 2, ...
-    #
     mapping = {}
     new_id = 0
-
     for i in range(n):
         pid = profile_out[i]
         if not np.isnan(pid) and pid not in mapping:
             mapping[pid] = new_id
             new_id += 1
-
     for i in range(n):
         pid = profile_out[i]
         if not np.isnan(pid):
             profile_out[i] = mapping[pid]
-
-    return profile_out
+    return profile_out, deployment_id

@@ -1,24 +1,63 @@
-# Ignore data, cache, logs, and junk
-dash_data/
+# -----------------------
+# Python cache
+# -----------------------
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.log
-*.csv
-*.nc
-*.tmp
-*.swp
-*.egg-info/
-.cache/
-.dash_uploads/
-.ipynb
 
-# Ignore VCS and IDE files
+# -----------------------
+# Git
+# -----------------------
 .git/
 .gitignore
-Dockerfile
-docker-compose.yml
-*.ipynb_checkpoints/
+
+# -----------------------
+# Development artifacts
+# -----------------------
+.ipynb_checkpoints/
 .vscode/
 .idea/
+
+# notebooks (optional)
+*.ipynb
+
+# -----------------------
+# Logs and temp files
+# -----------------------
+*.log
+*.tmp
+*.swp
+
+# -----------------------
+# Python packaging
+# -----------------------
+build/
+dist/
+*.egg-info/
+
+# -----------------------
+# Dash cache
+# -----------------------
+.cache/
+.dash_uploads/
+
+# -----------------------
+# Large generated outputs
+# (only if not needed by dashapp)
+# -----------------------
+merged_data/
+raw_data/
+
+# -----------------------
+# Keep required data
+# -----------------------
+!dash_data/
+!dash_data/**
+
+# Keep assets
+!assets/
+!assets/**
+
+# Old code files
+old_code/

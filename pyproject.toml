@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neslter-stingray"
+version = "0.1.0"
+description = "NES-LTER Stingray data processing and visualization"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "matplotlib>=3.6",
+    "scipy>=1.9",
+    "plotly>=5.0",
+    "dash>=2.0"
+]
+
+[project.optional-dependencies]
+
+dev = [
+    "jupyter",
+    "pytest",
+    "ipykernel"
+]
+
+shadowgraph = [
+    "opencv-python",
+    "tator"
+]
+
+all = [
+    "jupyter",
+    "pytest",
+    "ipykernel",
+    "opencv-python",
+    "tator"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

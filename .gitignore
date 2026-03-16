@@ -1,4 +1,6 @@
-# Python cache / compiled files
+# -----------------------
+# Python
+# -----------------------
 __pycache__/
 *.pyc
 *.pyo
@@ -7,43 +9,82 @@ __pycache__/
 
 # Virtual environments
 .venv/
-env/
 venv/
+env/
 
+# -----------------------
 # Jupyter
+# -----------------------
 .ipynb_checkpoints/
 
-# VSCode / PyCharm / IDE stuff
+# -----------------------
+# IDE
+# -----------------------
 .vscode/
 .idea/
 
+# -----------------------
 # Logs
+# -----------------------
 *.log
 
-# Dash auto-generated cache
+# -----------------------
+# Dash cache
+# -----------------------
 .cache/
 dash_uploads/
 
-# OS stuff
+# -----------------------
+# OS
+# -----------------------
 .DS_Store
 Thumbs.db
 
+# -----------------------
 # Docker
+# -----------------------
 *.pid
 *.sock
 .env
 docker-compose.override.yml
 
-# Ignore files
-*.csv
-*.CAL
-*.ipynb
-*.html
-*.png
+# -----------------------
+# Data outputs (large)
+# -----------------------
+raw_data/
+merged_data/
+indexes/
+media_list/
+modified_CAL/
 
-# Keep misc file
+# Dash data folders with many CSVs
+dash_data/data/
+
+# Old code files
+old_code/
+
+# calibration files
+*.CAL
+
+# -----------------------
+# Ignore general CSVs
+# -----------------------
+*.csv
+
+# -----------------------
+# Allow important reference data
+# -----------------------
 !dash_data/misc/
 !dash_data/misc/**
+!src/stingray/data_reference/**
+
+# -----------------------
+# Keep assets
+# -----------------------
 !assets/
 !assets/**
-*dash_data/misc/profiles_depths.csv
+
+# -----------------------
+# Ignore notebooks (optional)
+# -----------------------
+*.ipynb
