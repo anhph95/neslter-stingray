@@ -170,30 +170,58 @@ def dynamic_ticks(vmin, vmax, nticks=6):
 # ============================================
 # 🔹 Main Data Loader with Smart Caching
 # ============================================
+import re
+import pandas as pd
 def canonicalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     df = df.copy()
-    cols = {c.lower(): c for c in df.columns}
+    def norm_colname(c: str) -> str:
+        c = str(c).strip().lower()
+        c = re.sub(r"_[0-9]+$", "", c)  # T090_1 -> t090, Sal00_2 -> sal00
+        return c
+    cols = {norm_colname(c): c for c in df.columns}
     aliases = {
         "latitude": ["latitude", "lat"],
         "longitude": ["longitude", "lon"],
-        "temperature": ["temperature", "t090", "t190"],
+        "temperature": ["temperature", "t090", "t090c", "t190", "t190c"],
         "salinity": ["salinity", "sal00", "sal11"],
-        "pressure": ["pressure", "press", "prd"],
-        "depth": ["depth", "depsm", "z"]
+        "pressure": ["pressure", "press", "prd", "prdm"],
+        "depth": ["depth", "depsm", "z"],
+        "times": ["times", "time"],
+        "date": ["date"],
     }
     for canon, names in aliases.items():
-        if canon not in df.columns:
+        if canon not in cols:
             for n in names:
                 if n in cols:
                     df[canon] = df[cols[n]]
                     break
-    # pressure fallback for CTD
-    if "depth" not in df.columns and "pressure" in df.columns:
-        df["depth"] = df["pressure"]
-    if "times" in df.columns:
-        df["times"] = pd.to_datetime(df["times"], errors="coerce")
+    cols = {norm_colname(c): c for c in df.columns}
+    if "depth" not in cols and "pressure" in cols:
+        df["depth"] = df[cols["pressure"]]
+    has_date = "date" in cols
+    has_times = "times" in cols
+    if has_times:
+        times_col = cols["times"]
+        is_numeric_times = pd.api.types.is_numeric_dtype(df[times_col])
+        if is_numeric_times:
+            df["time_s"] = df[times_col]
+            if times_col != "times":
+                df.drop(columns=[times_col], inplace=True)
+            else:
+                df.drop(columns=["times"], inplace=True)
+            if has_date:
+                df["times"] = pd.to_datetime(df[cols["date"]], errors="coerce")
+            else:
+                df["times"] = pd.NaT
+        else:
+            df["times"] = pd.to_datetime(df[times_col], errors="coerce")
+    else:
+        if has_date:
+            df["times"] = pd.to_datetime(df[cols["date"]], errors="coerce")
+        else:
+            df["times"] = pd.NaT
     return df
 
 def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample"):
