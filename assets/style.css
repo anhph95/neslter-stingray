@@ -188,7 +188,7 @@ select {
 /* Main transect plot */
 .main-graph {
   width: 100%;
-  height: 520px;        /* taller main visualization */
+  height: 620px;        /* taller main visualization */
   margin-bottom: 12px;
 }
 
@@ -196,7 +196,7 @@ select {
    default ratio = 1 : 1.2 */
 .ts-graph {
   width: 520px;
-  height: 624px;        /* 520 × 1.2 */
+  height: 620px;        
   margin: 0 auto 12px;  /* center horizontally */
 }
 

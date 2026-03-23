@@ -506,10 +506,6 @@ app.layout = html.Div([
                     )
                 ]),
                 html.Div([
-                    html.Label('Marker size:'),
-                    dcc.Input(id='size', type='number', value=5, debounce=True)
-                ]),
-                html.Div([
                     html.Label('Min Depth:'),
                     dcc.Input(id='z_min', type='number', value=0, debounce=True)
                 ]),
@@ -601,7 +597,11 @@ app.layout = html.Div([
                 ]),
                 html.Div([
                     html.Label('Opacity:'),
-                    dcc.Input(id='hidden_opacity', type='number', value=0.05, debounce=True)
+                    dcc.Input(id='hidden_opacity', type='number', value=0.1, debounce=True)
+                ]),
+                html.Div([
+                    html.Label('Size:'),
+                    dcc.Input(id='size', type='number', value=5, debounce=True)
                 ]),
                 html.Hr(),
                 html.Label('PLOT LAYOUT:', className='section-label'),
@@ -639,7 +639,7 @@ app.layout = html.Div([
                 ]),
                 html.Div([
                     html.Label('Font Size:'),
-                    dcc.Input(id='plot_font_size', type='number', value=10, debounce=True)
+                    dcc.Input(id='plot_font_size', type='number', value=14, debounce=True)
                 ]),
             ], className='panel')
         ], className='left-panel'),
@@ -704,15 +704,79 @@ app.layout = html.Div([
 
 # Define which UI parameters should be mirrored in the URL
 URL_SYNCED_PARAMS = [
-    {"key": "dataset",   "id": "dataset_selector", "default": None,          "type": "string"},
-    {"key": "file",      "id": "csv_selector",     "default": None,          "type": "string"},
-    {"key": "variable",  "id": "color_variable",   "default": "temperature", "type": "string"},
-    {"key": "colormap",  "id": "color_map",        "default": "Jet",         "type": "string"},
-    {"key": "zmin",      "id": "z_min",            "default": 0,             "type": "float"},
-    {"key": "zmax",      "id": "z_max",            "default": 200,           "type": "float"},
-    {"key": "opacity",   "id": "hidden_opacity",   "default": 0.05,          "type": "float"},
-    {"key": "subsample", "id": "sub_sample",       "default": 3,             "type": "int"},
+    # dataset / file
+    {"key": "dataset", "id": "dataset_selector", "default": None, "type": "string"},
+    {"key": "file", "id": "csv_selector", "default": None, "type": "string"},
+    # cruise track
+    {"key": "trackx", "id": "cruise_track_xaxis", "default": "times", "type": "string"},
+    {"key": "tracky", "id": "cruise_track_yaxis", "default": "latitude", "type": "string"},
+    # main transect plot
+    {"key": "x", "id": "x_axis_variable", "default": "latitude", "type": "string"},
+    {"key": "y", "id": "y_axis_variable", "default": "depth", "type": "string"},
+    {"key": "variable", "id": "color_variable", "default": "temperature", "type": "string"},
+    {"key": "colormap", "id": "color_map", "default": "Jet", "type": "string"},
+    {"key": "size", "id": "size", "default": 5, "type": "int"},
+    {"key": "zmin", "id": "z_min", "default": 0, "type": "float"},
+    {"key": "zmax", "id": "z_max", "default": 200, "type": "float"},
+    {"key": "vmin", "id": "v_min", "default": None, "type": "float", "write": False},
+    {"key": "vmax", "id": "v_max", "default": None, "type": "float", "write": False},
+    {"key": "opacity", "id": "hidden_opacity", "default": 0.1, "type": "float"},
+    {"key": "bathymetry", "id": "bathymetry", "default": ["True"], "type": "list"},
+    {"key": "station", "id": "station", "default": ["True"], "type": "list"},
+    # TS plot
+    {"key": "tsvar", "id": "ts_color_variable", "default": "chlorophyll", "type": "string"},
+    {"key": "tsmap", "id": "ts_color_map", "default": "Viridis", "type": "string"},
+    {"key": "tsvmin", "id": "ts_v_min", "default": None, "type": "float", "write": False},
+    {"key": "tsvmax", "id": "ts_v_max", "default": None, "type": "float", "write": False},
+    # profile plot
+    {"key": "profilevar", "id": "profile_variable", "default": "chlorophyll", "type": "string"},
+    {"key": "profilemap", "id": "profile_color_map", "default": "Viridis", "type": "string"},
+    # sampling / averaging
+    {"key": "sampling", "id": "sampling_mode", "default": "subsample", "type": "string"},
+    {"key": "subsample", "id": "sub_sample", "default": DEFAULT_SUBSAMPLE, "type": "int"},
+    {"key": "maxgap", "id": "max_gap_seconds", "default": DEFAULT_MAX_TIME_GAP_SEC, "type": "int"},
+    # layout
+    {"key": "trackw", "id": "track_width", "default": None, "type": "int"},
+    {"key": "trackh", "id": "track_height", "default": None, "type": "int"},
+    {"key": "mainw", "id": "main_width", "default": None, "type": "int"},
+    {"key": "mainh", "id": "main_height", "default": None, "type": "int"},
+    {"key": "tsw", "id": "ts_width", "default": None, "type": "int"},
+    {"key": "tsh", "id": "ts_height", "default": None, "type": "int"},
+    {"key": "profilew", "id": "profile_width", "default": None, "type": "int"},
+    {"key": "profileh", "id": "profile_height", "default": None, "type": "int"},
+    # global text
+    {"key": "fontsize", "id": "plot_font_size", "default": 14, "type": "int"},
 ]
+
+def _serialize_url_value(value, typ):
+    if value is None:
+        return None
+    if typ == "list":
+        if not value:
+            return None
+        return ",".join(map(str, value))
+    return str(value)
+
+def _deserialize_url_value(raw, typ, default=None):
+    if raw is None:
+        return default
+    if typ == "string":
+        return raw
+    if typ == "int":
+        try:
+            return int(raw)
+        except (ValueError, TypeError):
+            return default
+    if typ == "float":
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            return default
+    if typ == "list":
+        if raw == "":
+            return []
+        return [x for x in raw.split(",") if x != ""]
+    return default
 
 # --- Callback: Update URL query string based on current UI state ---
 @app.callback(
@@ -724,40 +788,41 @@ URL_SYNCED_PARAMS = [
 )
 def update_url(*args):
     *values, current_search, restore_done = args
-    # Do not write URL while initial restore is still happening
     if not restore_done:
         return no_update
-    current_values = {
-        p["key"]: val for p, val in zip(URL_SYNCED_PARAMS, values)
-    }
+    current_values = {p["key"]: val for p, val in zip(URL_SYNCED_PARAMS, values)}
     dataset = current_values.get("dataset")
     file_name = current_values.get("file")
-    # only dataset and file are required
     if not dataset or not file_name:
         return no_update
     existing_params = parse_qs(urlparse(current_search or "").query)
-    # preserve unrelated params
     params = {
-        k: v[0] for k, v in existing_params.items()
+        k: v[0]
+        for k, v in existing_params.items()
         if k not in {p["key"] for p in URL_SYNCED_PARAMS}
     }
-    # always write required params
     params["dataset"] = str(dataset)
     params["file"] = str(file_name)
-    # optional params:
-    # include only if not empty and not default
     for p in URL_SYNCED_PARAMS:
         key = p["key"]
         if key in ("dataset", "file"):
+            continue
+        if p.get("write", True) is False:
+            params.pop(key, None)
             continue
         val = current_values.get(key)
         default = p.get("default")
         if val in (None, "", []):
             params.pop(key, None)
-        elif val == default:
+            continue
+        if val == default:
+            params.pop(key, None)
+            continue
+        sval = _serialize_url_value(val, p["type"])
+        if sval is None:
             params.pop(key, None)
         else:
-            params[key] = str(val)
+            params[key] = sval
     new_search = f"?{urlencode(params)}"
     if new_search == (current_search or ""):
         return no_update
@@ -772,42 +837,35 @@ def update_url(*args):
 )
 def restore_from_url(search):
     datasets = scan_datasets()
-    # parse URL first
     params = parse_qs(urlparse(search or "").query)
-    # --- resolve dataset first ---
     dataset_default = datasets[-1] if datasets else None
     dataset_val = params.get("dataset", [dataset_default])[0]
     if dataset_val not in datasets:
         dataset_val = dataset_default
-    # --- resolve file against the resolved dataset ---
     csv_files = get_csv_files(dataset_val) if dataset_val else []
     file_default = csv_files[-1] if csv_files else None
     file_val = params.get("file", [file_default])[0]
     if file_val not in csv_files:
         file_val = file_default
-    # defaults for the remaining params
     defaults = {}
     for p in URL_SYNCED_PARAMS:
         if p["key"] == "dataset":
             defaults["dataset"] = dataset_val
         elif p["key"] == "file":
-            defaults["file"] = file_default
+            defaults["file"] = file_val
         else:
             defaults[p["key"]] = p["default"]
     results = []
     for p in URL_SYNCED_PARAMS:
-        key, typ = p["key"], p["type"]
+        key = p["key"]
+        typ = p["type"]
         if key == "dataset":
             val = dataset_val
         elif key == "file":
             val = file_val
         else:
-            val = params.get(key, [defaults[key]])[0]
-            if typ in ("int", "float"):
-                try:
-                    val = int(val) if typ == "int" else float(val)
-                except (ValueError, TypeError):
-                    val = defaults[key]
+            raw = params.get(key, [None])[0]
+            val = _deserialize_url_value(raw, typ, defaults.get(key))
         results.append(val)
     return results + [True]
 
@@ -839,10 +897,9 @@ def update_csv_files(dataset, n_clicks, current_value, search):
         return [], None
     triggered = ctx.triggered_id
     if triggered in ("refresh-button", "dataset_selector"):
-        global DATA_CACHE, AVERAGE_CACHE, CURRENT_FILE
+        global DATA_CACHE, AVERAGE_CACHE
         DATA_CACHE.clear()
         AVERAGE_CACHE.clear()
-        CURRENT_FILE = None
     csv_files = get_csv_files(dataset)
     options = [{"label": f, "value": f} for f in csv_files]
     params = parse_qs(urlparse(search or "").query)
@@ -889,21 +946,32 @@ def update_color_variable_options(dataset, csv_file,
         ]
     sensor_vars = SENSOR_VAR_CACHE[csv_path]
     options = [{'label': v.capitalize(), 'value': v} for v in sensor_vars]
-    default = sensor_vars[0] if sensor_vars else None
+    default_color = "temperature" if "temperature" in sensor_vars else (sensor_vars[0] if sensor_vars else None)
+    ts_candidates = [v for v in sensor_vars if v not in ['temperature', 'salinity']]
+    default_ts = "chlorophyll" if "chlorophyll" in ts_candidates else (ts_candidates[0] if ts_candidates else None)
+    default_profile = "temperature" if "temperature" in sensor_vars else (sensor_vars[0] if sensor_vars else None)
     params = parse_qs(urlparse(search or "").query)
     url_color = params.get("variable", [None])[0]
+    url_ts = params.get("tsvar", [None])[0]
+    url_profile = params.get("profilevar", [None])[0]
     if url_color in sensor_vars:
         color_val = url_color
     elif current_color in sensor_vars:
         color_val = current_color
     else:
-        color_val = default
-    ts_candidates = [v for v in sensor_vars if v not in ['temperature', 'salinity']]
-    if current_ts_color in ts_candidates:
+        color_val = default_color
+    if url_ts in ts_candidates:
+        ts_val = url_ts
+    elif current_ts_color in ts_candidates:
         ts_val = current_ts_color
     else:
-        ts_val = ts_candidates[0] if ts_candidates else None
-    profile_val = current_profile_var if current_profile_var in sensor_vars else default
+        ts_val = default_ts
+    if url_profile in sensor_vars:
+        profile_val = url_profile
+    elif current_profile_var in sensor_vars:
+        profile_val = current_profile_var
+    else:
+        profile_val = default_profile
     return options, color_val, options, ts_val, options, profile_val
 
 # --- Callback: Reset main plot color limits when color variable changes ---
@@ -1006,12 +1074,12 @@ def update_size_inputs(data):
 )
 def apply_manual_layout(trw, trh, mw, mh, tsw, tsh, pw, ph):
     def style(w, h):
-        if w is None or h is None:
-            return no_update
-        return {
-            "width": f"{int(w)}px",
-            "height": f"{int(h)}px"
-        }
+        out = {}
+        if w is not None:
+            out["width"] = f"{int(w)}px"
+        if h is not None:
+            out["height"] = f"{int(h)}px"
+        return out if out else no_update
     return (
         style(trw, trh),
         style(mw, mh),
@@ -1534,6 +1602,7 @@ def update_main_plot(dataset, csv_file, sub_sample, sampling_mode,
         Input('sampling_mode', 'value'),
         Input('ts_color_variable', 'value'),
         Input('ts_color_map', 'value'),
+        Input('size', 'value'),
         Input('ts_v_min', 'value'),
         Input('ts_v_max', 'value'),
         Input('hidden_opacity', 'value'),
@@ -1542,7 +1611,7 @@ def update_main_plot(dataset, csv_file, sub_sample, sampling_mode,
     ]
 )
 def update_ts_plot(dataset, csv_file, sub_sample, sampling_mode,
-                   color_var, color_map, vmin, vmax,
+                   color_var, color_map, size, vmin, vmax,
                    hidden_opacity, fontsize, cruise_track_selection):
     # --------------------------------------------------------
     # 1️⃣ Load Data
@@ -1612,7 +1681,7 @@ def update_ts_plot(dataset, csv_file, sub_sample, sampling_mode,
             y=df['temperature'],
             mode="markers",
             marker=dict(
-                size=5,
+                size=size,
                 color=df[color_var],
                 colorscale=color_map,
                 cmin=vmin,

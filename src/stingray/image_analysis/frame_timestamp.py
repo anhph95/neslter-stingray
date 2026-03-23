@@ -12,18 +12,31 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 # ====== DEFAULTS ======
 # =======================
 DEFAULT_BASE_MEDIA_DIR = "/proj/nes-lter/Stingray/data"
-DEFAULT_MAX_WORKERS = max(1, int(os.getenv("SLURM_CPUS_PER_TASK", os.cpu_count() or 1)) - 1)
+SLURM_CPUS = int(os.getenv("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+# Fast mode is mostly metadata + a few frame reads, so do not over-allocate
+DEFAULT_MAX_WORKERS = max(1, min(8, SLURM_CPUS - 1))
+# User-facing names
 VIDEO_TYPE_CONFIG = {
-    "Basler_a2a2840-14gmBAS": {
+    "ISIIS2": {
         "fps": 12.0,
         "out_dir": "/proj/nes-lter/Stingray/data/media_list/ISIIS2",
+        "folder_name": "Basler_a2a2840-14gmBAS",
     },
-    "Basler_avA2300-25gm": {
+    "ISIIS1": {
         "fps": 15.0,
         "out_dir": "/proj/nes-lter/Stingray/data/media_list/ISIIS1",
+        "folder_name": "Basler_avA2300-25gm",
     },
 }
 DEFAULT_SUFFIXES = {".avi", ".mp4", ".png", ".tiff"}
+# Prevent thread oversubscription inside OpenCV / BLAS
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+try:
+    cv2.setNumThreads(1)
+except Exception:
+    pass
 # =======================
 # ====== HELPERS ========
 # =======================
@@ -74,9 +87,6 @@ def get_frame_count(file_path):
         count += 1
     cap.release()
     return count
-def count_one_file(file_path):
-    frame_count = get_frame_count(file_path)
-    return (file_path, frame_count)
 def resolve_config(video_type, fps_arg, out_dir_arg):
     if video_type not in VIDEO_TYPE_CONFIG:
         raise ValueError(
@@ -86,7 +96,8 @@ def resolve_config(video_type, fps_arg, out_dir_arg):
     config = VIDEO_TYPE_CONFIG[video_type]
     fps = fps_arg if fps_arg is not None else config["fps"]
     out_dir = out_dir_arg if out_dir_arg is not None else config["out_dir"]
-    return fps, out_dir
+    folder_name = config["folder_name"]
+    return fps, out_dir, folder_name
 def build_base_dataframe(media_dir, max_workers, suffixes=None, file_limit=None):
     file_paths = list_files(media_dir)
     allowed = normalize_suffixes(suffixes) if suffixes else DEFAULT_SUFFIXES
@@ -101,6 +112,7 @@ def build_base_dataframe(media_dir, max_workers, suffixes=None, file_limit=None)
         suffix_counts[suf] = suffix_counts.get(suf, 0) + 1
     log(f"Files found after suffix filter: {len(file_paths):,}")
     log(f"Suffix counts: {suffix_counts}")
+    log(f"Thread workers for stat step: {max_workers}")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         file_list_with_sizes = list(
             tqdm(
@@ -135,8 +147,10 @@ def assign_frame_counts_fast(df, max_workers):
     odd_mask = df["media_size"] != standard_size
     odd_files = df.loc[odd_mask, "media_path"].tolist()
     log(f"Odd-sized files requiring frame count check: {len(odd_files):,}")
+    odd_workers = max(1, min(4, max_workers))
     if odd_files:
-        with ThreadPoolExecutor(max_workers=min(4, max_workers)) as executor:
+        log(f"Thread workers for odd-file frame count step: {odd_workers}")
+        with ThreadPoolExecutor(max_workers=odd_workers) as executor:
             results = list(
                 tqdm(
                     executor.map(get_frame_count, odd_files),
@@ -165,11 +179,6 @@ def expand_frames(df, fps):
     df["times"] = df["media_time"] + pd.to_timedelta(df["frame"] / fps, unit="s")
     return df
 def process_media_details(file_path):
-    """
-    Old-script behavior for details mode:
-    - videos: use per-frame CAP_PROP_POS_MSEC
-    - images: emit one frame with media_time as timestamp
-    """
     media_name = Path(file_path).stem
     base_time = parse_media_time(media_name)
     suffix = Path(file_path).suffix.lower()
@@ -236,6 +245,7 @@ def extract_details_dataframe(media_dir, max_workers, suffixes=None, file_limit=
     log(f"Files found after suffix filter: {len(file_paths):,}")
     log(f"Suffix counts: {suffix_counts}")
     log(f"Running full per-frame timestamp extraction for {len(file_paths):,} files")
+    log(f"Process workers for details mode: {max_workers}")
     all_records = []
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         for records in tqdm(
@@ -251,43 +261,38 @@ def extract_details_dataframe(media_dir, max_workers, suffixes=None, file_limit=
         log(f"Bad file rows: {bad_files:,}")
         log(f"Bad frame rows: {bad_frames:,}")
     return df
-# =======================
-# ====== MAIN ===========
-# =======================
 def main():
     parser = argparse.ArgumentParser(
         description="Build media CSV using fast modal-size logic or full per-frame timestamp extraction."
     )
     parser.add_argument("--cruise", required=True, help="Cruise to process")
-    parser.add_argument("--video-type", required=True, choices=list(VIDEO_TYPE_CONFIG.keys()))
+    parser.add_argument(
+        "--video-type",
+        required=True,
+        choices=list(VIDEO_TYPE_CONFIG.keys()),
+        help="Logical camera name: ISIIS1 or ISIIS2",
+    )
     parser.add_argument("--base-media-dir", default=DEFAULT_BASE_MEDIA_DIR)
-    parser.add_argument("--out-dir", default=None, help="Override default output directory for the selected video type")
-    parser.add_argument("--fps", type=float, default=None, help="Override default fps for the selected video type")
+    parser.add_argument("--out-dir", default=None)
+    parser.add_argument("--fps", type=float, default=None)
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
     parser.add_argument("--file-limit", type=int, default=None)
-    parser.add_argument(
-        "--suffix",
-        nargs="+",
-        default=None,
-        help="Restrict to file suffix(es), e.g. --suffix .avi .mp4",
-    )
-    parser.add_argument(
-        "--details",
-        action="store_true",
-        help="Use full per-frame timestamp extraction instead of fast modal file-size shortcut",
-    )
+    parser.add_argument("--suffix", nargs="+", default=None)
+    parser.add_argument("--details", action="store_true")
     args = parser.parse_args()
     t0 = time.time()
-    fps, out_dir = resolve_config(args.video_type, args.fps, args.out_dir)
+    fps, out_dir, folder_name = resolve_config(args.video_type, args.fps, args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
     cruise = args.cruise
-    media_dir = f"{args.base_media_dir}/NESLTER_{cruise}/{args.video_type}"
+    media_dir = f"{args.base_media_dir}/NESLTER_{cruise}/{folder_name}"
     log(f"Processing cruise: {cruise}")
     log(f"Video type: {args.video_type}")
+    log(f"Source folder name: {folder_name}")
     log(f"Media dir: {media_dir}")
     log(f"FPS: {fps}")
     log(f"Output dir: {out_dir}")
-    log(f"Max workers: {args.max_workers}")
+    log(f"SLURM_CPUS_PER_TASK: {SLURM_CPUS}")
+    log(f"Requested max workers: {args.max_workers}")
     log(f"Mode: {'details' if args.details else 'fast'}")
     allowed_suffixes = normalize_suffixes(args.suffix) if args.suffix else DEFAULT_SUFFIXES
     log(f"Allowed suffixes: {sorted(allowed_suffixes)}")
