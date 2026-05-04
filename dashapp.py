@@ -879,9 +879,14 @@ def restore_from_url(search):
 def refresh_dataset_list(_, current_value):
     ds = scan_datasets()
     options = [{'label': f, 'value': f} for f in ds]
+    if not ds:
+        return [], None
     if current_value in ds:
         return options, current_value
-    return options, (ds[-1] if ds else None)
+    # do not aggressively replace selection unless nothing is selected
+    if current_value is None:
+        return options, ds[-1]
+    return options, no_update
 
 # --- Callback: Refresh available CSV file list ---
 @app.callback(
@@ -889,10 +894,11 @@ def refresh_dataset_list(_, current_value):
     Output("csv_selector", "value"),
     Input("dataset_selector", "value"),
     Input("refresh-button", "n_clicks"),
+    Input("file-scan-interval", "n_intervals"),
     State("csv_selector", "value"),
     State("url", "search"),
 )
-def update_csv_files(dataset, n_clicks, current_value, search):
+def update_csv_files(dataset, n_clicks, _scan_tick, current_value, search):
     if not dataset:
         return [], None
     triggered = ctx.triggered_id
@@ -909,7 +915,6 @@ def update_csv_files(dataset, n_clicks, current_value, search):
     if current_value in csv_files:
         return options, current_value
     return options, (csv_files[-1] if csv_files else None)
-
 # ============================================================
 # === Color Variable and Range Management ===
 # ============================================================

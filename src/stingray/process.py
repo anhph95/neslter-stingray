@@ -21,7 +21,7 @@ def cli():
     p.add_argument("--root", default="sensor_data", help="Root sensor data dir")
     p.add_argument("--cal-year", default="2021")
     p.add_argument("--time-bin-seconds", type=float, default=5.0)
-    p.add_argument("--out-dir", default="dash_data/data/stingray_timebinned/")
+    p.add_argument("--out-dir", default="dash_data/data/stingray/")
     p.add_argument("--media-list-dirs", nargs="*", default=["media_list/ISIIS1", "media_list/ISIIS2"])
     p.add_argument("--overwrite-index", action="store_true")
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])

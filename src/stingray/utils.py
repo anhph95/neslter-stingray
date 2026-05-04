@@ -551,7 +551,6 @@ def convert_gps(raw_series, sign_series):
 def datenum(dts):
     # Define the base date (MATLAB uses Jan 0, 0000, but Python uses a different base)
     base_date = datetime(1, 1, 1)
-
     # Function to calculate the serial date number for a single datetime object
     def date2num(dt):
         if isinstance(dt, pd.Timestamp):
@@ -560,7 +559,6 @@ def datenum(dts):
             raise TypeError("Input must be a datetime object or pandas.Timestamp")
         delta = dt - base_date
         return delta.days + delta.seconds / 86400 + 366 + 1
-
     # Check if the input is a list of datetime objects
     if isinstance(dts, (list, np.ndarray, pd.Series)):
         # Process each datetime object in the list
@@ -576,7 +574,6 @@ def datestr(date_numbers, fmt=0, as_str=False):
     # MATLAB base date is 0000-01-01, using closest Python date 0001-01-01
     # Adjust by one day because Python's datetime starts at 0001-01-01
     matlab_base_date = datetime(1, 1, 1)
-    
     # Define format options similar to MATLAB's `datestr`
     formats = {
         0: '%d-%b-%Y %H:%M:%S',  # Default format
@@ -586,11 +583,9 @@ def datestr(date_numbers, fmt=0, as_str=False):
         4: '%d/%m/%Y',            # Day/Month/Year
         5: '%H:%M:%S',            # Time
     }
-    
     def num2date(date_number):
         # Convert serial date number to datetime
         date_time_obj = matlab_base_date + timedelta(days=date_number - 366.0 -1.0)
-        
         if as_str:
             # Use custom format if provided
             if isinstance(fmt, str):
@@ -599,7 +594,6 @@ def datestr(date_numbers, fmt=0, as_str=False):
                 return date_time_obj.strftime(formats.get(fmt, '%d-%b-%Y %H:%M:%S'))
         else:
             return date_time_obj
-    
     # Check if the input is a single serial date number or a list
     if isinstance(date_numbers, (int, float)):  # Single int or float
         return num2date(date_numbers)
@@ -633,7 +627,6 @@ def matdate2timestamp(matdate, origin_date=datetime(1904, 1, 1)):
     def one(x):
         dt = datestr(x, as_str=False)  # MATLAB datenum -> datetime
         return (dt - origin_date).total_seconds()
-
     if isinstance(matdate, (int, float)):
         return one(matdate)
     elif isinstance(matdate, (list, np.ndarray, pd.Series)):
@@ -651,29 +644,23 @@ def read_csv_parallel(file_list, max_workers=None):
     """
     import pandas as pd
     import os, concurrent.futures
-
     def safe_read_csv(file):
         try:
             return pd.read_csv(file, low_memory=False)
         except Exception as e:
             logging.info(f"Failed to read {file}: {e}")
             return pd.DataFrame()  # Empty if failed
-
     # Pick sensible number of workers
     if max_workers is None:
         max_workers = max(os.cpu_count() - 1, 8)
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         dfs = list(executor.map(safe_read_csv, file_list))
-
     # ⚠️ Filter out empty DataFrames to avoid deprecated concat([]) call
     dfs = [df for df in dfs if not df.empty]
-
     if dfs:  # only concat if we actually have data
         concatenated_df = pd.concat(dfs, ignore_index=True)
     else:
         concatenated_df = pd.DataFrame()
-
     return concatenated_df
 
 def build_file_index(dir_root):
@@ -682,10 +669,8 @@ def build_file_index(dir_root):
     """
     import glob, os
     from datetime import datetime
-
     list_of_pairs = []
     list_all = glob.glob(f"{dir_root}/*.csv")
-
     for file in list_all:
         try:
             basename = os.path.basename(file).rsplit(".", 1)[0]
@@ -694,19 +679,16 @@ def build_file_index(dir_root):
             list_of_pairs.append((file_date, file))
         except Exception as e:
             logging.info(f"⚠️ Skipped {file}: {e}")
-
     return list_of_pairs
 
 def filter_file_index(file_index_df, start_date, end_date):
     """Filter file index DataFrame for files within a given date range (inclusive)."""
     if "datetime" not in file_index_df.columns:
         raise ValueError("file_index_df must contain a 'datetime' column")
-
     if end_date is None:
         end_date = datetime.max
     else:
         end_date = end_date + timedelta(days=1)  # make inclusive
-
     mask = (file_index_df["datetime"] >= start_date) & (file_index_df["datetime"] < end_date)
     return file_index_df.loc[mask, "filepath"].tolist()
 
@@ -732,7 +714,6 @@ def load_or_build_file_index(dir_root, out_file, overwrite=False):
         else:
             logging.info(f"No cached index found. Building new index: {out_file}")
         df = save_file_index(dir_root, out_file)
-
     return df
 
 
@@ -740,7 +721,6 @@ def load_or_build_file_index(dir_root, out_file, overwrite=False):
 def merge_df(df1, df2, on, cols=None, direction='backward', duplicates=False):
     """
     Merges two dataframes using merge_asof and optionally masks duplicates in specified columns.
-    
     Parameters:
     - df1 (pd.DataFrame): The first dataframe.
     - df2 (pd.DataFrame): The second dataframe.
@@ -748,32 +728,24 @@ def merge_df(df1, df2, on, cols=None, direction='backward', duplicates=False):
     - cols (list): List of columns to merge from df2. If None, uses columns from df2 that don't overlap with df1.
     - direction (str): Direction for merge_asof. Default is 'backward'.
     - duplicates (bool): If False, masks duplicate matches in df2.
-
     Returns:
     - pd.DataFrame: The merged dataframe, optionally with duplicates masked.
     """    
-    
     # Make a copy of the dataframes to avoid modifying the original data
     df1 = df1.copy().sort_values(on).reset_index(drop=True)
     df2 = df2.copy().sort_values(on).reset_index(drop=True)
-
     # If cols is None, get non-overlapping columns from df2
     if not cols:
         cols = df2.columns.difference(df1.columns).tolist()
-        
     # Add an 'id' column to track original rows in df2
     df2['id'] = df2.index
-    
     # Perform the merge using merge_asof
     merged_df = pd.merge_asof(df1, df2[[on] + cols + ['id']], on=on, direction=direction)
-
     # Mask duplicates if the duplicates flag is False
     if not duplicates:
         merged_df[cols] = merged_df[cols].mask(merged_df.duplicated(subset='id'))
-
     # Drop the 'id' column as it's no longer needed
     merged_df.drop(columns='id', inplace=True)
-    
     return merged_df
 
 
@@ -788,85 +760,66 @@ def bin_data(df, cols, steps):
     NaT values are preserved (not dropped).
     """
     df = df.copy()
-
     for col, step in zip(cols, steps):
         if np.issubdtype(df[col].dtype, np.datetime64):
             # Initialize with NaT
             binned = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
-
             # Only apply binning to valid datetimes
             valid = df[col].notna()
             binned.loc[valid] = pd.to_datetime(
                 ((df.loc[valid, col].astype("int64") + step // 2) // step) * step
             )
-
             df[f"{col}_bin"] = binned
-
         else:
             df[f"{col}_bin"] = np.floor((df[col] + step / 2) / step) * step
-
     return df
 
 def bin_vectors(vectors, steps):
     """
     Bin numeric or datetime vectors by given step sizes, with simple hysteresis.
-
     For each input vector in `vectors` and its corresponding step in `steps`:
-
     1. We first compute a "naive" bin using standard quantization:
            numeric:   floor((x + step/2) / step) * step
            datetime:  round to nearest bin in ns using the same idea on int64
-
     2. Then we apply a 1D hysteresis rule along the original element order:
-
            - We keep track of:
                last_raw : the last *committed* raw value
                last_bin : the bin assigned to that committed value
-
            - For each new sample raw[i]:
                if |raw[i] - last_raw| < step:
                    treat as noise  → assign bin[i] = last_bin
                else:
                    treat as real move → accept bin[i] as computed,
                                         and update last_raw, last_bin
-
        This means:
          - Tiny fluctuations less than `step` around the last committed value
            will NOT cause a bin change.
          - A change of at least `step` (or more) in the raw value will create
            a new bin.
          - This works for any numeric vector and for datetime64 vectors (in ns).
-
     3. NaNs / NaT:
          - Datetime NaT values are preserved and never binned.
          - Numeric NaNs keep their quantized value, but they do NOT update
            hysteresis state (they are effectively skipped in the hysteresis
            comparison).
-
     The function returns a list of binned vectors, one per input vector.
     """
-
     """
     Prepare a list to collect the binned output vectors.
     """
     outputs = []
-
     """
     Loop over each input vector and its corresponding step size.
     """
     for vec, step in zip(vectors, steps):
-
         # Convert to NumPy array (do not copy unless needed)
         raw = np.asarray(vec)
-
         # ------------------------------------------------------------------ #
         # Datetime64 case
         # ------------------------------------------------------------------ #
         if np.issubdtype(raw.dtype, np.datetime64):
-
             """
             For datetime vectors:
-
             1. Work only on valid (non-NaT) entries.
             2. Convert datetimes to int64 nanoseconds for arithmetic.
             3. Quantize (round) using the same midpoint rule:
@@ -874,32 +827,24 @@ def bin_vectors(vectors, steps):
             4. Apply hysteresis on the raw_ns values:
                    compare current raw_ns to last committed raw_ns.
             """
-
             # Initialize output array with NaT so missing values are preserved
             out = np.full(raw.shape, np.datetime64("NaT"), dtype="datetime64[ns]")
-
             # Boolean mask for non-NaT values
             valid = ~np.isnat(raw)
-
             # Raw datetime values as int64 nanoseconds (only where valid)
             raw_ns = raw[valid].astype("int64")
-
             """
             Step 1: naive binning (quantization).
-
             We do midpoint rounding by adding step//2 before integer division:
               - (raw_ns + step//2) // step   gives the bin index
               - * step                      rescales to ns units
             """
             q_ns = ((raw_ns + step // 2) // step) * step
-
             """
             Step 2: hysteresis on actual sample difference.
-
             We walk through raw_ns in original order and maintain:
               last_raw : last committed raw ns value
               last_bin : bin assigned at that commitment
-
             For each index i:
                 if this is the first valid sample:
                     commit it directly (seed hysteresis)
@@ -909,13 +854,10 @@ def bin_vectors(vectors, steps):
                     else:
                         → real move → accept q_ns[i] and update last_raw, last_bin
             """
-
             last_raw = None
             last_bin = None
-
             for i in range(raw_ns.size):
                 current_raw = raw_ns[i]
-
                 if last_raw is None:
                     # First valid sample: seed hysteresis state
                     last_raw = current_raw
@@ -929,44 +871,33 @@ def bin_vectors(vectors, steps):
                         # Big enough: commit a new bin and update hysteresis state
                         last_raw = current_raw
                         last_bin = q_ns[i]
-
             # Convert back to datetime64[ns] and fill the output array
             out[valid] = q_ns.astype("datetime64[ns]")
-
             outputs.append(out)
-
         # ------------------------------------------------------------------ #
         # Numeric case
         # ------------------------------------------------------------------ #
         else:
             """
             For numeric vectors:
-
             1. We compute the naive quantized bin:
                    q = floor((x + step/2) / step) * step
                which is midpoint rounding to the nearest step.
-
             2. We apply the same hysteresis idea as for datetimes, but now
                using raw numeric values instead of ns.
             """
-
             raw = raw.astype(float, copy=False)
-
             """
             Step 1: naive numeric binning.
-
             - Add step/2 before division to implement midpoint rounding.
             - floor(...) then multiply by step gives the quantized bin center.
             """
             q = np.floor((raw + step / 2.0) / step) * step
-
             """
             Step 2: hysteresis on actual sample difference.
-
             We iterate in element order and keep:
               last_raw : last committed raw numeric value
               last_bin : bin assigned at that commitment
-
             For each index i:
                 - If raw[i] is NaN:
                     * skip it for hysteresis (do not update last_raw/last_bin)
@@ -981,17 +912,13 @@ def bin_vectors(vectors, steps):
                               → real move → accept q[i] and update
                                             last_raw, last_bin
             """
-
             last_raw = None
             last_bin = None
-
             for i in range(raw.size):
                 current_raw = raw[i]
-
                 # Treat NaN as a gap: do not update hysteresis state
                 if np.isnan(current_raw):
                     continue
-
                 if last_raw is None:
                     # First non-NaN: seed hysteresis
                     last_raw = current_raw
@@ -1004,9 +931,7 @@ def bin_vectors(vectors, steps):
                         # Large enough → commit new bin and update hysteresis
                         last_raw = current_raw
                         last_bin = q[i]
-
             outputs.append(q)
-
     """
     Return the list of binned vectors, one per input vector.
     """
@@ -1050,47 +975,89 @@ def read_file(filename, hdr=None):
         logging.info(f"Failed to read {filename}: {e}")
         return pd.DataFrame()
     
-## Joe Futrelle get nearest stations
-def get_cruise_stations(cruise):
-    url = 'https://nes-lter-data.whoi.edu/api/stations/{}.csv'.format(cruise)
-    return pd.read_csv(url)
-
-class StationLocator(object):
-    def __init__(self, cruise):
-        self.station_metadata = get_cruise_stations(cruise.lower())
-
-    def station_distances(self, lat, lon):
+## Get nearest stations
+class StationLocator:
+    DEFAULT_STATION_REF_URL = "https://nes-lter-api.whoi.edu/api/stations/file"
+    def __init__(
+        self,
+        station_reference: pd.DataFrame | str | None = None,
+        max_distance_km: float = 2.0
+    ):
+        if station_reference is None:
+            st = pd.read_csv(self.DEFAULT_STATION_REF_URL)
+        elif isinstance(station_reference, str):
+            st = pd.read_csv(station_reference)
+        else:
+            st = station_reference.copy()
+        st.columns = st.columns.str.strip()
+        required = ['station', 'startDate', 'endDate', 'decimalLatitude', 'decimalLongitude']
+        missing = [c for c in required if c not in st.columns]
+        if missing:
+            raise ValueError(f"station_reference missing required columns: {missing}")
+        st['station'] = st['station'].astype(str).str.strip()
+        st['startDate'] = pd.to_datetime(st['startDate'], errors='coerce', utc=True).dt.tz_localize(None)
+        st['endDate'] = st['endDate'].replace('current', pd.NA)
+        st['endDate'] = pd.to_datetime(st['endDate'], errors='coerce', utc=True).dt.tz_localize(None)
+        st['endDate_filled'] = st['endDate'].fillna(pd.Timestamp('2100-12-31'))
+        st['decimalLatitude'] = pd.to_numeric(st['decimalLatitude'], errors='coerce')
+        st['decimalLongitude'] = pd.to_numeric(st['decimalLongitude'], errors='coerce')
+        st = st.dropna(subset=['station', 'startDate', 'decimalLatitude', 'decimalLongitude']).copy()
+        self.station_reference = st
+        self.max_distance_km = max_distance_km
+    def active_stations(self, timestamp) -> pd.DataFrame:
+        ts = pd.to_datetime(timestamp, errors='coerce', utc=True)
+        if pd.isna(ts):
+            raise ValueError("timestamp is missing or invalid")
+        ts = ts.tz_localize(None)
+        active = self.station_reference[
+            (self.station_reference['startDate'] <= ts) &
+            (ts <= self.station_reference['endDate_filled'])
+        ].copy()
+        if active.empty:
+            raise ValueError(f"No active stations found for timestamp {ts}")
+        return active
+    def station_distances(self, lat, lon, timestamp) -> pd.Series:
+        active = self.active_stations(timestamp)
         distances = []
         index = []
-        for station in self.station_metadata.itertuples():
-            index.append(station.Index)
-            distance = geo_distance([lat,lon], [station.latitude, station.longitude]).km
-            distances.append(distance)
-        distances = pd.Series(distances, index=index)
-        return distances
-
-    def nearest_station(self, lat, lon):
-        distances = self.station_distances(lat, lon)
+        for row in active.itertuples():
+            d_km = geo_distance(
+                (lat, lon),
+                (row.decimalLatitude, row.decimalLongitude)
+            ).km
+            distances.append(d_km)
+            index.append(row.Index)
+        return pd.Series(distances, index=index)
+    def nearest_station(self, lat, lon, timestamp, max_distance_km: float | None = None):
+        distances = self.station_distances(lat, lon, timestamp)
         i = distances.idxmin()
-        distance = distances.loc[i]
-        station_name = self.station_metadata['name'][i]
-        return station_name, distance
-    
-    def nearest_stations(self, df, lat_col='latitude', lon_col='longitude'):
-        names, distances, index = [], [], []
+        d_km = distances.loc[i]
+        threshold = self.max_distance_km if max_distance_km is None else max_distance_km
+        if threshold is not None and d_km > threshold:
+            return np.nan, np.nan
+        station_name = self.station_reference.loc[i, 'station']
+        return station_name, d_km
+    def nearest_stations(
+        self,
+        df,
+        lat_col='latitude',
+        lon_col='longitude',
+        time_col='sample_time',
+        max_distance_km: float | None = None
+    ):
+        names, distances = [], []
         for row in df.itertuples():
             lat = getattr(row, lat_col)
             lon = getattr(row, lon_col)
-            name, distance = self.nearest_station(lat, lon)
+            ts = getattr(row, time_col)
+            if pd.isna(lat) or pd.isna(lon) or pd.isna(ts):
+                names.append(np.nan)
+                distances.append(np.nan)
+                continue
+            name, dist = self.nearest_station(lat, lon, ts, max_distance_km=max_distance_km)
             names.append(name)
-            distances.append(distance)
-        
+            distances.append(dist)
         return names, distances
-    
-    # Usage
-    # locator = StationLocator(cruise)
-    # df['nearest_station'], df['station_distance'] = locator.nearest_stations(df)
-
 
     
 from numba import njit
@@ -1135,8 +1102,6 @@ def ies80(s, t, p):
             rho[i] = r0
     return rho
 
-# utils_logging.py (or put in utils.py)
-
 
 ### Data merge utils
 import os, sys, logging
@@ -1145,50 +1110,37 @@ from datetime import datetime
 def setup_logging(log_dir="logs", name=None, level=logging.INFO):
     """
     Universal logging setup:
-
       - logs/<script>_<timestamp>.out.log  (INFO+)
       - logs/<script>_<timestamp>.err.log  (ERROR+)
       - console output (INFO+)
-
     Log format:
       INFO | message
     """
     os.makedirs(log_dir, exist_ok=True)
-
     logger = logging.getLogger(name)  # root if name=None
     logger.setLevel(level)
-
     fmt = logging.Formatter("%(levelname)s | %(message)s")
-
     # Prevent duplicate handlers if called multiple times in same process
     if logger.handlers:
         return logger
-
     script = os.path.splitext(os.path.basename(sys.argv[0]))[0]
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     stdout_path = os.path.join(log_dir, f"{script}_{ts}.out.log")
     stderr_path = os.path.join(log_dir, f"{script}_{ts}.err.log")
-
     stdout_handler = logging.FileHandler(stdout_path)
     stdout_handler.setLevel(logging.INFO)
     stdout_handler.setFormatter(fmt)
-
     stderr_handler = logging.FileHandler(stderr_path)
     stderr_handler.setLevel(logging.ERROR)
     stderr_handler.setFormatter(fmt)
-
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(fmt)
-
     logger.addHandler(stdout_handler)
     logger.addHandler(stderr_handler)
     logger.addHandler(console)
-
     logger.info(f"Logging to: {stdout_path}")
     logger.info(f"Errors to: {stderr_path}")
-
     return logger
 
 # =========================
@@ -1199,19 +1151,16 @@ def assign_time_bins(timestamps, bin_width, grid_start, grid_end):
     n = timestamps.shape[0]
     out = np.empty(n, dtype=np.float64)
     n_bins = int(np.ceil((grid_end - grid_start) / bin_width))
-
     for i in range(n):
         ti = timestamps[i]
         if not np.isfinite(ti):
             out[i] = np.nan
             continue
-
         idx = int(np.floor((ti - grid_start) / bin_width))
         if idx < 0 or idx >= n_bins:
             out[i] = np.nan
         else:
             out[i] = grid_start + idx * bin_width
-
     return out
 
 

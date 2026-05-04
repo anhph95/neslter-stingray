@@ -5,9 +5,7 @@ services:
     ports:
       - "8050:8050"
     volumes:
-      # Live-update data without rebuilding container
-      - ./dash_data:/app/dash_data
-      # Optional: live update CSS/images
+      - ./dash_data:/dash_data
       - ./assets:/app/assets
     environment:
       DASH_DEBUG: "1"
