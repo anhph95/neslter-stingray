@@ -1,0 +1,2 @@
+[console_scripts]
+stingray = stingray.cli.main:main

@@ -10,10 +10,6 @@ COMMANDS = {
         "help": "Merge sensor data",
         "target": "stingray.cli.sensors:main",
     },
-    ("ctd", "download"): {
-        "help": "Download CTD cruise data",
-        "target": "stingray.getctd:main",
-    },
     ("dashboard", "run"): {
         "help": "Run Dash dashboard",
         "target": "stingray.dashboard.app:main",
@@ -34,13 +30,22 @@ COMMANDS = {
         "help": "Add Tator annotation links",
         "target": "stingray.images.get_tator_link:main",
     },
+    ("ctd", "download"): {
+        "help": "Download CTD cruise data",
+        "target": "ctd_tools.download:main",
+    }
 }
 
 
-def load_target(target: str) -> Callable[[list[str]], None]:
+def load_target(target: str) -> Callable[[list[str] | None], None]:
     module_name, func_name = target.split(":", 1)
     module = import_module(module_name)
-    return getattr(module, func_name)
+    func = getattr(module, func_name)
+
+    if not callable(func):
+        raise TypeError(f"Target is not callable: {target}")
+
+    return func
 
 
 def run_target(target: str, argv: list[str]) -> None:
@@ -48,32 +53,51 @@ def run_target(target: str, argv: list[str]) -> None:
     func(argv)
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="stingray")
-    groups = parser.add_subparsers(dest="command", required=True)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="stingray",
+        description="Stingray command-line tools",
+    )
 
-    group_parsers = {}
+    groups = parser.add_subparsers(
+        dest="group",
+        metavar="<group>",
+        required=True,
+    )
+
+    group_parsers: dict[str, argparse._SubParsersAction] = {}
 
     for (group, command), spec in COMMANDS.items():
         if group not in group_parsers:
-            group_parser = groups.add_parser(group, help=f"{group} commands")
+            group_parser = groups.add_parser(
+                group,
+                help=f"{group} commands",
+            )
             group_parsers[group] = group_parser.add_subparsers(
-                dest=f"{group}_command",
+                dest="command",
+                metavar="<command>",
                 required=True,
             )
 
         command_parser = group_parsers[group].add_parser(
             command,
             help=spec["help"],
+            description=spec["help"],
         )
         command_parser.set_defaults(target=spec["target"])
 
-    args, unknown = parser.parse_known_args(argv)
+    return parser
 
-    if not hasattr(args, "target"):
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args, passthrough_args = parser.parse_known_args(argv)
+
+    target = getattr(args, "target", None)
+    if target is None:
         parser.error("No command selected")
 
-    run_target(args.target, unknown)
+    run_target(target, passthrough_args)
 
 
 if __name__ == "__main__":

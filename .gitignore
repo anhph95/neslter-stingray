@@ -1,71 +1,30 @@
 # ======================
-# Ignore everything
-# ======================
-*
-
-# ======================
-# Allow directories we want tracked
-# ======================
-!src/
-!assets/
-!dash_data/
-!dash_data/misc/
-
-# ======================
-# Allow contents of those dirs
-# ======================
-!src/**
-!assets/**
-!dash_data/misc/**
-
-# ======================
-# Ignore Python cache and build artifacts
-# ======================
-src/**/__pycache__/
-src/**/*.pyc
-src/**/*.pyo
-src/**/*.pyd
-src/**/*.egg-info/
-
-# ======================
-# Allow important root project files
-# ======================
-!dashapp.py
-!pyproject.toml
-!requirements.txt
-!environment.yml
-!Dockerfile
-!docker-compose.yml
-!README.md
-!LICENSE
-!.gitignore
-!.dockerignore
-!.gitattributes
-
-# ======================
-# Ignore common Python artifacts anywhere
+# Python artifacts
 # ======================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.pkl
+*.egg-info/
+build/
+dist/
 
 # ======================
-# Ignore virtual environments
+# Virtual environments
 # ======================
 .venv/
 venv/
 env/
 
 # ======================
-# Ignore notebooks
+# Notebooks
 # ======================
 *.ipynb
 .ipynb_checkpoints/
 
 # ======================
-# Ignore logs and temp
+# Logs / cache
 # ======================
 *.log
 .cache/
@@ -80,7 +39,7 @@ dash_uploads/
 Thumbs.db
 
 # ======================
-# Ignore large data and outputs
+# Large data / outputs
 # ======================
 raw_data/
 merged_data/
@@ -91,17 +50,35 @@ dash_data/data/
 old_code/
 
 # ======================
-# Ignore calibration / binary data
+# Calibration / binary
 # ======================
 *.CAL
 *.mat
 
 # ======================
-# Ignore general CSV outputs
+# CSV outputs (ignore all, then allow specific)
 # ======================
 *.csv
+!dash_data/misc/**/*.csv
 
 # ======================
-# Re-allow small reference CSVs
+# Explicitly keep project structure
 # ======================
-!dash_data/misc/**/*.csv
+!src/
+!src/**
+!assets/
+!assets/**
+!dash_data/
+!dash_data/misc/
+!dash_data/misc/**
+
+# ======================
+# Root project files
+# ======================
+!pyproject.toml
+!README.md
+!LICENSE
+!.gitignore
+!.dockerignore
+!Dockerfile
+!docker-compose.yml

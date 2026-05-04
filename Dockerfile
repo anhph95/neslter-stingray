@@ -2,18 +2,16 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install only Dash app dependencies
-RUN pip install --no-cache-dir \
-    dash==3.2.0 \
-    plotly==5.24.1 \
-    pandas==2.2.3 \
-    numpy==2.1.2
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
 
-# Copy Dash app
-COPY dashapp.py /app/
+COPY pyproject.toml README.md /app/
+COPY src/ /app/src/
 COPY assets/ /app/assets/
 
-# Dash runs on 8050
+RUN pip install --upgrade pip \
+    && pip install .
+
 EXPOSE 8050
 
-CMD ["python", "dashapp.py"]
+CMD ["stingray", "dashboard", "run", "--host", "0.0.0.0", "--port", "8050", "--work-dir", "/dash_data"]

@@ -1,12 +1,24 @@
 services:
   dash:
-    build: .
-    container_name: dashapp
+    build:
+      context: .
+    container_name: stingray-dashboard
+
     ports:
       - "8050:8050"
+
     volumes:
       - ./dash_data:/dash_data
-      - ./assets:/app/assets
+      - ./assets:/app/assets:ro
+
     environment:
       DASH_DEBUG: "1"
+      PYTHONUNBUFFERED: "1"
+
+    command: >
+      stingray dashboard run
+      --host 0.0.0.0
+      --port 8050
+      --work-dir /dash_data
+
     restart: unless-stopped
