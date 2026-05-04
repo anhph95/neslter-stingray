@@ -24,8 +24,7 @@ dependencies = [
 ]
 
 [project.scripts]
-stingray-process = "stingray.cli.process:main"
-stingray-dashapp = "stingray.dashboard.dashapp:main"
+stingray = "stingray.cli.main:main"
 
 [project.optional-dependencies]
 dev = [

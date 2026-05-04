@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 DEFAULT_BASE_MEDIA_DIR = "/proj/nes-lter/Stingray/data"
 SLURM_CPUS = int(os.getenv("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
 # Fast mode is mostly metadata + a few frame reads, so do not over-allocate
-DEFAULT_MAX_WORKERS = max(1, min(8, SLURM_CPUS - 1))
+DEFAULT_MAX_WORKERS = max(1, min(8, SLURM_CPUS - 1 if SLURM_CPUS > 1 else 1))
 # User-facing names
 VIDEO_TYPE_CONFIG = {
     "ISIIS2": {
@@ -285,6 +285,8 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     cruise = args.cruise
     media_dir = f"{args.base_media_dir}/NESLTER_{cruise}/{folder_name}"
+    if not media_dir.is_dir():
+        raise FileNotFoundError(f"Media directory not found: {media_dir}")
     log(f"Processing cruise: {cruise}")
     log(f"Video type: {args.video_type}")
     log(f"Source folder name: {folder_name}")

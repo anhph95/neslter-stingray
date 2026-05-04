@@ -10,22 +10,22 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from stingray.config.columns import sled_columns
+from stingray.config.columns import SLED_COLUMNS
 from stingray.io.csv import read_csv_parallel
 from stingray.io.indexing import load_or_build_file_index, filter_file_index
-from stingray.temporal.matlab import convert_timestamp
-from stingray.core.binning import assign_time_bins
+from stingray.utils.temporal import convert_timestamp
+from stingray.utils.gridding import assign_time_bins
+from stingray.utils.spatial import convert_gps
 from stingray.sensors.ctd import density_ies80
 from stingray.sensors.fluorometer import calibrate_chlorophyll, calibrate_backscatter
 from stingray.sensors.par import calibrate_par
 from stingray.sensors.suna import calibrate_nitrate
-from stingray.spatial.gps import convert_gps
 from stingray.profiles.identify import identify_profiles
 
 logger = logging.getLogger(__name__)
 
 
-def process_cruise(
+def merge_sensors(
     cruise: str,
     start: str,
     end: str,
@@ -363,7 +363,7 @@ def process_cruise(
     sled = sled.drop(columns=["time_bin"], errors="ignore")
     sled = sled.sort_values("timestamp")
 
-    sled.rename(columns=sled_columns, inplace=True)
+    sled.rename(columns=SLED_COLUMNS, inplace=True)
 
     # -------------------------
     # QC: GPS INTERPOLATION INSIDE DEPLOYMENTS ONLY

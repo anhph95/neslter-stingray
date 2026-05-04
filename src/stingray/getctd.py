@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import os
 API_URL = "https://nes-lter-api.whoi.edu"
-DEFAULT_MAX_WORKERS = os.cpu_count() - 1
+DEFAULT_MAX_WORKERS = max(1, (os.cpu_count() or 2) - 1)
 def setup_logging(log_dir="logs", name="ctd_batch", level=logging.INFO):
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger(name)

@@ -1,4 +1,4 @@
-# spatial/stations.py
+# utils/spatial.py
 
 from __future__ import annotations
 
@@ -7,6 +7,9 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
+def convert_gps(raw_series, sign_series):
+    signs = sign_series.map({'N': 1, 'S': -1, 'E': 1, 'W': -1})
+    return signs * (np.floor(raw_series / 100) + (raw_series % 100) / 60)
 
 DistanceMethod = Literal["haversine", "geodesic"]
 

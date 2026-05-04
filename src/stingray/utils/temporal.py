@@ -1,3 +1,5 @@
+# utils/temporal.py
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -10,6 +12,57 @@ import pandas as pd
 MATLAB_EPOCH_OFFSET_DAYS = 367.0
 DEFAULT_ORIGIN_DATE = datetime(1904, 1, 1)
 
+def convert_timestamp(timestamp, origin_date: datetime = DEFAULT_ORIGIN_DATE):
+    """
+    Convert seconds since origin_date to pandas datetime(s) and MATLAB datenum(s).
+    """
+    times = pd.to_datetime(timestamp, unit="s", origin=origin_date)
+    matdate = datenum(times)
+    return times, matdate
+
+
+def matdate2timestamp(matdate, origin_date: datetime = DEFAULT_ORIGIN_DATE):
+    """
+    Convert MATLAB datenum(s) to seconds since origin_date.
+    """
+    def one(x):
+        dt = datestr(x, as_str=False)
+        return (dt - origin_date).total_seconds()
+
+    if isinstance(matdate, (int, float, np.integer, np.floating)):
+        return one(matdate)
+    if isinstance(matdate, (list, tuple, np.ndarray, pd.Series)):
+        return [one(x) for x in matdate]
+    raise TypeError("Input must be a scalar or array-like MATLAB date number")
+
+
+def rawdate2date(series: pd.Series) -> pd.Series:
+    """
+    Convert YYYYDDD integer/string values to pandas datetime.
+
+    Example:
+        2024032 -> 2024-02-01
+    """
+    s = series.astype(str).str.strip()
+    year = s.str[:4]
+    day_of_year = s.str[4:].astype(int) - 1
+    return pd.to_datetime(year, format="%Y") + pd.to_timedelta(day_of_year, unit="D")
+
+
+def rawtime2time(series: pd.Series) -> pd.Series:
+    """
+    Convert hour-decimal values to HH:MM:SS strings.
+
+    Example:
+        13.5 -> '13:30:00'
+    """
+    day_fractions = series.astype(float) / 24.0
+    td = pd.to_timedelta(day_fractions, unit="D")
+
+    return td.dt.components.apply(
+        lambda x: f"{x['hours']:02}:{x['minutes']:02}:{x['seconds']:02}",
+        axis=1,
+    )
 
 def _to_python_datetime(dt) -> datetime:
     if isinstance(dt, pd.Timestamp):
@@ -86,25 +139,3 @@ def datestr(date_numbers, fmt=0, as_str=False):
     )
 
 
-def convert_timestamp(timestamp, origin_date: datetime = DEFAULT_ORIGIN_DATE):
-    """
-    Convert seconds since origin_date to pandas datetime(s) and MATLAB datenum(s).
-    """
-    times = pd.to_datetime(timestamp, unit="s", origin=origin_date)
-    matdate = datenum(times)
-    return times, matdate
-
-
-def matdate2timestamp(matdate, origin_date: datetime = DEFAULT_ORIGIN_DATE):
-    """
-    Convert MATLAB datenum(s) to seconds since origin_date.
-    """
-    def one(x):
-        dt = datestr(x, as_str=False)
-        return (dt - origin_date).total_seconds()
-
-    if isinstance(matdate, (int, float, np.integer, np.floating)):
-        return one(matdate)
-    if isinstance(matdate, (list, tuple, np.ndarray, pd.Series)):
-        return [one(x) for x in matdate]
-    raise TypeError("Input must be a scalar or array-like MATLAB date number")

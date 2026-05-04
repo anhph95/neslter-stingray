@@ -1,4 +1,4 @@
-# temporal/binning.py
+# utils/gridding.py
 
 from __future__ import annotations
 
@@ -9,37 +9,6 @@ import pandas as pd
 from numba import njit
 
 logger = logging.getLogger(__name__)
-
-# Function to merge two dataframes using merge_asof and optionally mask duplicates
-def merge_df(df1, df2, on, cols=None, direction='backward', duplicates=False):
-    """
-    Merges two dataframes using merge_asof and optionally masks duplicates in specified columns.
-    Parameters:
-    - df1 (pd.DataFrame): The first dataframe.
-    - df2 (pd.DataFrame): The second dataframe.
-    - on (str): The column to merge on.
-    - cols (list): List of columns to merge from df2. If None, uses columns from df2 that don't overlap with df1.
-    - direction (str): Direction for merge_asof. Default is 'backward'.
-    - duplicates (bool): If False, masks duplicate matches in df2.
-    Returns:
-    - pd.DataFrame: The merged dataframe, optionally with duplicates masked.
-    """    
-    # Make a copy of the dataframes to avoid modifying the original data
-    df1 = df1.copy().sort_values(on).reset_index(drop=True)
-    df2 = df2.copy().sort_values(on).reset_index(drop=True)
-    # If cols is None, get non-overlapping columns from df2
-    if not cols:
-        cols = df2.columns.difference(df1.columns).tolist()
-    # Add an 'id' column to track original rows in df2
-    df2['id'] = df2.index
-    # Perform the merge using merge_asof
-    merged_df = pd.merge_asof(df1, df2[[on] + cols + ['id']], on=on, direction=direction)
-    # Mask duplicates if the duplicates flag is False
-    if not duplicates:
-        merged_df[cols] = merged_df[cols].mask(merged_df.duplicated(subset='id'))
-    # Drop the 'id' column as it's no longer needed
-    merged_df.drop(columns='id', inplace=True)
-    return merged_df
 
 def bin_data(
     df: pd.DataFrame,
@@ -244,7 +213,6 @@ def bin_vectors(
     Return the list of binned vectors, one per input vector.
     """
     return outputs
-
 
 def mid2range(midpoints) -> np.ndarray:
     """

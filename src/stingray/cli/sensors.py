@@ -4,7 +4,7 @@ import argparse
 import logging
 
 from stingray.logging.setup import setup_logging
-from stingray.pipelines.process_cruise import process_cruise
+from stingray.sensors.merge import merge_sensors
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,7 +43,7 @@ def main() -> None:
         level=getattr(logging, args.log_level),
     )
 
-    process_cruise(
+    merge_sensors(
         cruise=args.cruise,
         start=args.start,
         end=args.end,
@@ -54,7 +54,6 @@ def main() -> None:
         media_list_dirs=args.media_list_dirs,
         overwrite_index=args.overwrite_index,
     )
-
 
 if __name__ == "__main__":
     main()
