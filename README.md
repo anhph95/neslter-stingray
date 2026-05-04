@@ -1,21 +1,48 @@
-# NES-LTER Stingray
+# StingrayTools
 
-## 📌 Overview
-This repository contains code and data processing scripts for the In-situ Ichthyoplankton Imaging System (ISIIS), also known as **Stingray**.
+Tools for processing, organizing, and visualizing NES-LTER Stingray / ISIIS sensor and imaging data.
+
+This package includes sensor-processing utilities, CTD/profile handling, image-link helpers, CSV I/O tools, statistical helpers, and a Dash dashboard for interactive exploration of Stingray cruise data.
 
 [![DOI](https://zenodo.org/badge/946902610.svg)](https://doi.org/10.5281/zenodo.15025961)
 
 ---
 
-## 📦 Installation
+## Repository layout
 
-### Clone this repository
-```bash
-git clone https://github.com/anhph95/nes-lter-stingray.git
-cd nes-lter-stingray
+```text
+src/
+├── stingray/
+│   ├── cli/              # Command-line entry points
+│   ├── config/           # Column definitions and unit mappings
+│   ├── dashboard/        # Dash dashboard application
+│   ├── data_reference/   # Reference files used by processing routines
+│   ├── images/           # Image/frame/media-link helper scripts
+│   ├── io/               # CSV, SUNA, and indexing utilities
+│   ├── logging/          # Logging setup
+│   ├── profiles/         # Profile/cast identification utilities
+│   ├── sensors/          # Sensor-specific processing modules
+│   ├── stats/            # Statistical utilities
+│   ├── utils/            # Spatial, temporal, and gridding utilities
+│   ├── getctd.py
+│   ├── process.py
+│   └── utils.py
+└── neslter_stingray.egg-info/
 ```
 
-### Create Python virtual environment (venv):
+---
+
+## Installation
+
+### Clone the repository
+
+```bash
+git clone https://github.com/anhph95/StingrayTools.git
+cd StingrayTools
+```
+
+### Install with a Python virtual environment
+
 ```bash
 sudo apt update
 sudo apt install python3-venv -y
@@ -24,158 +51,207 @@ source venv/bin/activate
 pip install -e .
 ```
 
-### Or create Conda environment:
+### Or install with Conda
+
 ```bash
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 bash Miniconda3-latest-Linux-x86_64.sh
 source ~/.bashrc
 conda env create -f environment.yml
-conda activate venv
+conda activate stingray
+pip install -e .
 ```
 
 ---
 
-## 🚀 Usage
+## Command-line usage
 
-### Process sensor data
-```
-usage: python -m stingray.process [-h] --cruise CRUISE --start START --end END
-                                  [--root ROOT]
-                                  [--cal-year CAL_YEAR]
-                                  [--time-bin-seconds TIME_BIN_SECONDS]
-                                  [--out-dir OUT_DIR]
-                                  [--media-list-dirs MEDIA_LIST_DIRS ...]
-                                  [--overwrite-index]
-                                  [--log-level {DEBUG,INFO,WARNING,ERROR}]
+### Process Stingray sensor data
 
-Stingray CTD-binned sensor aggregation + media + casts (dashboard build)
-
-options:
-  -h, --help            show this help message and exit
-  --cruise CRUISE       Cruise ID, required, e.g. EN706
-  --start START         Cruise start date (YYYY-MM-DD), required
-  --end END             Cruise end date (YYYY-MM-DD), required
-  --root ROOT           Path to the sensor data, default is sensor_data
-  --cal-year CAL_YEAR   Sensor calibration year, default is 2021
-  --time-bin-seconds TIME_BIN_SECONDS
-                        Time bin size in seconds, default is 5
-  --out-dir OUT_DIR     Output directory for dashboard data,
-                        default is dash_data/data/stingray_timebinned/
-  --media-list-dirs MEDIA_LIST_DIRS
-                        Paths to media list directories, default is
-                        media_list/ISIIS1 media_list/ISIIS2
-  --overwrite-index     Rebuild cached sensor file indexes
-  --log-level           Logging level (DEBUG, INFO, WARNING, ERROR),
-                        default INFO
+```bash
+python -m stingray.process \
+  --cruise EN706 \
+  --start YYYY-MM-DD \
+  --end YYYY-MM-DD \
+  --root sensor_data \
+  --out-dir dash_data/data/stingray_timebinned
 ```
 
-### Visualize data
-Data from `dash_data/data` can be copied into:
+Common options:
+
+```text
+--cruise CRUISE
+    Cruise ID, e.g. EN706.
+
+--start START
+    Cruise start date in YYYY-MM-DD format.
+
+--end END
+    Cruise end date in YYYY-MM-DD format.
+
+--root ROOT
+    Path to the raw sensor-data directory. Default: sensor_data.
+
+--cal-year CAL_YEAR
+    Sensor calibration year. Default: 2021.
+
+--time-bin-seconds TIME_BIN_SECONDS
+    Time-bin size in seconds. Default: 5.
+
+--out-dir OUT_DIR
+    Output directory for dashboard-ready CSV files.
+
+--media-list-dirs MEDIA_LIST_DIRS ...
+    Media-list directories for ISIIS image links.
+
+--overwrite-index
+    Rebuild cached sensor-file indexes.
+
+--log-level {DEBUG,INFO,WARNING,ERROR}
+    Logging level. Default: INFO.
 ```
+
+### Sensor and image utilities
+
+The package also includes modules for sensor-specific processing and image/media metadata handling:
+
+```text
+stingray.sensors.ctd
+stingray.sensors.fluorometer
+stingray.sensors.par
+stingray.sensors.suna
+stingray.sensors.merge
+stingray.images.frame_timestamp
+stingray.images.get_tator_link
+stingray.images.abundance
+stingray.images.generate_training
+```
+
+Use the relevant module directly or import functions from Python scripts and notebooks as needed.
+
+---
+
+## Dashboard usage
+
+The dashboard reads data from the configured `dash_data/` directory. Expected local structure:
+
+```text
+dash_data/
+├── data/
+│   └── <dataset_name>/
+│       └── *.csv
+└── misc/
+    ├── NESLTER_station_list.csv
+    └── NESLTER_transect_bathymetry.csv
+```
+
+### Run the dashboard locally
+
+```bash
+python -m stingray.dashboard.app --host 0.0.0.0 --port 8050
+```
+
+Then open:
+
+```text
+http://localhost:8050
+```
+
+### Use the WHOI-hosted dashboard
+
+Dashboard-ready data from `dash_data/data` can be copied to:
+
+```text
 \\vast.whoi.edu\proj\nes-lter\stingray_dashboard\dash_data\data
 ```
 
-The dashboard can then be accessed via:  
-👉 [https://stingraydash.whoi.edu/](https://stingraydash.whoi.edu/)
+The dashboard can then be accessed at:
 
----
-
-### OR run the visualization app locally (requires `plotly`, `dash`)
-```
-usage: dashapp.py [-h] [--host HOST] [--port PORT]
-
-Stingray Dashboard
-
-options:
-  -h, --help   show this help message and exit
-  --host HOST  Host IP address for the Dash app, default is 0.0.0.0
-  --port PORT  Port number for the Dash app, default is 8050
+```text
+https://stingraydash.whoi.edu/
 ```
 
 ---
 
-## 🐳 Running via Docker
+## Docker usage
 
-The recommended way to run the Stingray Dashboard is with **Docker Compose**.
+The dashboard can also be run with Docker Compose.
 
-### 🛠 Prerequisites
-- [Docker](https://docs.docker.com/get-docker/) installed  
-- [Docker Compose](https://docs.docker.com/compose/) (bundled with Docker Desktop on most systems)  
+### Start the dashboard
 
----
-
-### 1. Start the app (build if first time or code changed)
 ```bash
 docker compose up --build
 ```
 
-This will:
-- Build the Docker image (if not already built or if code changed)  
-- Mount the `dash_data/` folder so new data is available without rebuilding  
-- Run the dashboard on [http://localhost:8050](http://localhost:8050)  
+This builds the image, mounts `dash_data/`, and serves the app at:
 
----
+```text
+http://localhost:8050
+```
 
-### 2. Stop the app
+### Stop the dashboard
+
 ```bash
 docker compose down
 ```
 
-This stops and removes the running container(s).
+### Run in detached mode
 
----
-
-### 3. Start in background (detached mode)
 ```bash
 docker compose up -d
 ```
 
-The dashboard will run in the background.  
-Stop it anytime with:
+Stop it with:
+
 ```bash
 docker compose down
 ```
 
----
+### Updating data
 
-### 4. Update data
-Because `dash_data/` is mounted as a bind volume, any changes to CSVs or input files in `dash_data/` on your machine are immediately reflected inside the container.  
+If `dash_data/` is mounted as a bind volume, updating CSV files does not require rebuilding the Docker image.
 
-👉 **No rebuild is required** when updating data.
+### Rebuilding after code changes
 
----
+Rebuild after modifying source code, dashboard code, assets, dependencies, or Docker configuration:
 
-### 5. Rebuild when code changes
-You only need to rebuild the image if you:
-- Modify `dashapp.py`  
-- Change code in the `assets/` folder  
-- Update `requirements.txt`  
-
-Rebuild with:
 ```bash
 docker compose up --build
 ```
 
 ---
 
-### 6. Access the dashboard
-After startup, visit in your browser:  
-👉 [http://localhost:8050](http://localhost:8050)  
+## Development notes
 
-Or, from another computer on the same network (LAN):  
-👉 `http://<your-computer-ip>:8050`  
+Install in editable mode during development:
+
+```bash
+pip install -e .
+```
+
+Useful checks:
+
+```bash
+python -m stingray.process --help
+python -m stingray.dashboard.app --help
+```
+
+Generated folders such as `__pycache__/`, `.egg-info/`, and local data/output directories should generally not be committed unless intentionally tracked.
+
+---
+
+## License
+
+This project is licensed under the MIT License. See the `LICENSE` file for details.
 
 ---
 
-## 📚 License
-This project is licensed under the **MIT License**. See the LICENSE file for details.
+## Contributors
+
+- Anh Pham
+- Sidney Batchelder
+- Heidi Sosik
 
 ---
 
-## ✨ Contributors
-- **Anh Pham**  
-- **Sidney Batchelder**  
-- **Heidi Sosik**  
-
----
-🔗 **GitHub Repository:** [https://github.com/anhph95/nes-lter-stingray](https://github.com/anhph95/nes-lter-stingray)  
+GitHub Repository: https://github.com/anhph95/StingrayTools
