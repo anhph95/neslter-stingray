@@ -24,10 +24,7 @@ src/
 │   ├── sensors/          # Sensor-specific processing modules
 │   ├── stats/            # Statistical utilities
 │   ├── utils/            # Spatial, temporal, and gridding utilities
-│   ├── getctd.py
-│   ├── process.py
-│   └── utils.py
-└── neslter_stingray.egg-info/
+└── ctd_tools/
 ```
 
 ---
