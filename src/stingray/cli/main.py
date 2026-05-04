@@ -6,8 +6,8 @@ from importlib import import_module
 
 
 COMMANDS = {
-    ("sensors", "process"): {
-        "help": "Merge/process sensor data",
+    ("sensors", "merge"): {
+        "help": "Merge sensor data",
         "target": "stingray.cli.sensors:main",
     },
     ("ctd", "download"): {

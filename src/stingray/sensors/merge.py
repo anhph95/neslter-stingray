@@ -53,9 +53,9 @@ def merge_sensors(
     # -------------------------
     sensor_names = ["CTD", "DVL", "Fluorometer", "GPS", "Oxygen", "PAR", "SUNA"]
     sensors = {}
-
+       
     for name in sensor_names:
-        logger.info("Loading %s...", name)
+        logger.info("Scanning raw %s files...", name)
 
         idx = load_or_build_file_index(
             root / name,
@@ -76,6 +76,7 @@ def merge_sensors(
     # -------------------------
     # DEFINE TIME GRID FROM CTD
     # -------------------------
+    logger.info("Defining time grid from CTD...")
     ctd = sensors["ctd"].copy()
 
     if ctd.empty:
@@ -89,6 +90,7 @@ def merge_sensors(
     # -------------------------
     # ATTACH time_bin TO ALL SENSORS
     # -------------------------
+    logger.info("Gridding all sensors...")
     for key, df in sensors.items():
         if df.empty:
             df["time_bin"] = np.nan
@@ -104,6 +106,7 @@ def merge_sensors(
     # -------------------------
     # CTD BLOCK
     # -------------------------
+    logger.info("Processing CTD...")
     ctd = sensors["ctd"]
 
     ctd["density"] = density_ies80(
@@ -133,6 +136,7 @@ def merge_sensors(
     # -------------------------
     # GPS BLOCK
     # -------------------------
+    logger.info("Processing GPS...")
     gps = sensors["gps"]
 
     if not gps.empty:
@@ -156,6 +160,7 @@ def merge_sensors(
     # -------------------------
     # DVL BLOCK
     # -------------------------
+    logger.info("Processing DVL...")
     dvl = sensors["dvl"]
 
     dvl_agg = (
@@ -176,6 +181,7 @@ def merge_sensors(
     # -------------------------
     # FLUOROMETER BLOCK
     # -------------------------
+    logger.info("Processing Fluorometer...")
     fluoro = sensors["fluorometer"]
 
     if not fluoro.empty:
@@ -199,6 +205,7 @@ def merge_sensors(
     # -------------------------
     # OXYGEN BLOCK
     # -------------------------
+    logger.info("Processing Oxygen...")
     oxygen = sensors["oxygen"]
 
     oxygen_agg = (
@@ -212,6 +219,7 @@ def merge_sensors(
     # -------------------------
     # PAR BLOCK
     # -------------------------
+    logger.info("Processing PAR...")
     par = sensors["par"]
 
     if not par.empty:
@@ -231,6 +239,7 @@ def merge_sensors(
     # -------------------------
     # SUNA BLOCK
     # -------------------------
+    logger.info("Processing SUNA...")
     suna = sensors["suna"]
 
     if not suna.empty:
@@ -262,6 +271,7 @@ def merge_sensors(
     # -------------------------
     # CAST / PROFILE SEGMENTATION
     # -------------------------
+    logger.info("Identifying casts and deployments from CTD...")
     cast, deployment = identify_profiles(
         depth=ctd_agg["Depth"].to_numpy(np.float64),
         time_seconds=ctd_agg["time_bin"].to_numpy(np.float64),
@@ -280,6 +290,7 @@ def merge_sensors(
     # -------------------------
     # MEDIA BLOCK
     # -------------------------
+    logger.info("Processing media files...")
     media_aggs = []
 
     for media_dir in media_list_dirs:
@@ -330,6 +341,9 @@ def merge_sensors(
         media_aggs.append(media_agg)
         logger.info("%s bins: %s", tag, len(media_agg))
 
+    if not media_aggs:
+        logger.warning("No media files found...")
+        
     # -------------------------
     # MERGE MASTER TABLE
     # -------------------------
@@ -393,7 +407,7 @@ def merge_sensors(
     out_path = out_dir / f"{start_date.strftime('%Y%m%d')}_{cruise}.csv"
     sled.to_csv(out_path, index=False)
 
-    logger.info("Saved: %s", out_path)
     logger.info("Final rows: %s", len(sled))
+    logger.info("Saved: %s", out_path)
 
     return out_path

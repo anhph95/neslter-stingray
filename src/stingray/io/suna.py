@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
-from stingray.temporal.parsing import rawdate2date, rawtime2time
+from stingray.utils.temporal import rawdate2date, rawtime2time
 
 logger = logging.getLogger(__name__)
 

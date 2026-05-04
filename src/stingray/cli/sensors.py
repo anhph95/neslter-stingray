@@ -7,7 +7,7 @@ from stingray.logging.setup import setup_logging
 from stingray.sensors.merge import merge_sensors
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Stingray CTD-binned sensor aggregation + media + casts"
     )
@@ -31,11 +31,11 @@ def parse_args() -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv=None) -> None:
+    args = parse_args(argv)
 
     setup_logging(
         log_dir="logs",

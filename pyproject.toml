@@ -3,11 +3,31 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "neslter-stingray"
-version = "1.1.0"
-description = "NES-LTER Stingray data processing and visualization"
+name = "StingrayTools"
+version = "1.0.0"
+description = "NES-LTER Stingray data processing and visualization tools"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Anh Pham" },
+    { name = "Sidney Batchelder" },
+    { name = "Heidi Sosik" },
+]
+keywords = [
+    "NES-LTER",
+    "Stingray",
+    "ISIIS",
+    "oceanography",
+    "sensor-processing",
+    "dashboard",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.0",
@@ -23,8 +43,14 @@ dependencies = [
     "tqdm>=4.64",
 ]
 
+[project.urls]
+Homepage = "https://github.com/anhph95/StingrayTools"
+Repository = "https://github.com/anhph95/StingrayTools"
+Issues = "https://github.com/anhph95/StingrayTools/issues"
+
 [project.scripts]
 stingray = "stingray.cli.main:main"
+stingray-dashboard = "stingray.dashboard.app:main"
 
 [project.optional-dependencies]
 dev = [
@@ -47,7 +73,15 @@ all = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["stingray*"]
+exclude = ["*.egg-info", "*.egg-info.*"]
+
+[tool.setuptools.package-data]
+stingray = [
+    "data_reference/*",
+]
