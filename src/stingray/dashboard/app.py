@@ -22,7 +22,7 @@ from plotly.colors import sample_colorscale
 # ============================================
 # Constants and module state
 # ============================================
-DEFAULT_SUBSAMPLE = 3
+DEFAULT_SUBSAMPLE = None
 DEFAULT_MAX_TIME_GAP_SEC = 300  # 5 minutes; tune per platform
 MAX_WORKERS = max(1, min(os.cpu_count() - 1, 8))
 
@@ -208,7 +208,7 @@ def canonicalize_columns(df: pd.DataFrame) -> pd.DataFrame:
             df["times"] = pd.NaT
     return df
 
-def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample"):
+def load_data(dataset: str, file_name: str, sub_sample: int | None = None, mode="subsample"):
     dataset_path = DATA_DIR / dataset
     csv_path = dataset_path / f"{file_name}.csv"
     if not csv_path.exists():
@@ -219,6 +219,8 @@ def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample
     # =========================================================
     if base_key not in DATA_CACHE:
         df = pd.read_csv(csv_path, low_memory=False)
+        df = pd.read_csv(csv_path, low_memory=True)
+        df = canonicalize_columns(df)
         # downcast for memory efficiency
         int_cols = df.select_dtypes(include=["int64"]).columns
         for col in int_cols:
@@ -227,13 +229,21 @@ def load_data(dataset: str, file_name: str, sub_sample: int = 1, mode="subsample
                 df[col] = s.astype(np.int32)
         if "point_id" not in df.columns:
             df = df.assign(point_id=np.arange(len(df), dtype=np.int32))
-        df = df.copy()
         df = df.set_index("point_id", drop=False)
-        df = canonicalize_columns(df)
         if len(DATA_CACHE) >= MAX_DATA_CACHE:
             DATA_CACHE.pop(next(iter(DATA_CACHE)))
         DATA_CACHE[base_key] = df
     df = DATA_CACHE[base_key]
+    # =========================================================
+    # AUTO SUBSAMPLING
+    # =========================================================
+    if sub_sample is None:
+        n_rows = len(df)
+        TARGET_POINTS = 30_000  
+        if n_rows <= TARGET_POINTS:
+            sub_sample = 1
+        else:
+            sub_sample = int(np.ceil(n_rows / TARGET_POINTS))
     # =========================================================
     # NO SAMPLING
     # =========================================================
@@ -654,8 +664,8 @@ def make_layout() -> html.Div:
                         html.Label('Colormap:'),
                         dcc.Dropdown(
                             id='profile_color_map',
-                            options=[{'label': cmap, 'value': cmap} for cmap in colormaps],
-                            value='Viridis'
+                            options=[{'label': cmap, 'value': cmap} for cmap in qualitative_maps],
+                            value='Plotly'
                         )
                     ]),
                 ], className='panel'),
@@ -676,7 +686,7 @@ def make_layout() -> html.Div:
                     ]),
                     html.Div([
                         html.Label('Bin size (N points):'),
-                        dcc.Input(id='sub_sample', type='number', value=DEFAULT_SUBSAMPLE, debounce=True)
+                        dcc.Input(id='sub_sample', type='number', value=DEFAULT_SUBSAMPLE, placeholder="Auto", debounce=True)
                     ]),
                     html.Div([
                         html.Label('Max time gap for averaging (sec):'),
@@ -817,7 +827,7 @@ URL_SYNCED_PARAMS = [
     {"key": "tsvmax", "id": "ts_v_max", "default": None, "type": "float", "write": False},
     # profile plot
     {"key": "profilevar", "id": "profile_variable", "default": "chlorophyll", "type": "string"},
-    {"key": "profilemap", "id": "profile_color_map", "default": "Viridis", "type": "string"},
+    {"key": "profilemap", "id": "profile_color_map", "default": "Plotly", "type": "string"},
     # sampling / averaging
     {"key": "sampling", "id": "sampling_mode", "default": "subsample", "type": "string"},
     {"key": "subsample", "id": "sub_sample", "default": DEFAULT_SUBSAMPLE, "type": "int"},
@@ -1032,7 +1042,8 @@ def register_callbacks(app: dash.Dash) -> None:
             return [], None, [], None, [], None
         csv_path = DATA_DIR / dataset / f"{csv_file}.csv"
         if csv_path not in SENSOR_VAR_CACHE:
-            dfi = load_data(dataset, csv_file, sub_sample=1, mode="subsample")
+            dfi = pd.read_csv(csv_path, nrows=1000, low_memory=True)
+            dfi = canonicalize_columns(dfi)
             SENSOR_VAR_CACHE[csv_path] = [
                 c for c in dfi.select_dtypes(include=[np.number]).columns
                 if "_std" not in c and c not in meta_vars
@@ -1197,7 +1208,7 @@ def register_callbacks(app: dash.Dash) -> None:
     def draw_cruise_track(dataset, csv_file, xaxis, yaxis, fontsize, sub_sample, sampling_mode):
         trigger = ctx.triggered_id
         if trigger not in (
-            "dataset_selector",   # add this
+            "dataset_selector",   
             "csv_selector",
             "cruise_track_xaxis",
             "cruise_track_yaxis",
@@ -1408,12 +1419,16 @@ def register_callbacks(app: dash.Dash) -> None:
             Input('main_plot', 'relayoutData'),
         ]
     )
-    def update_main_plot(dataset, csv_file, sub_sample, sampling_mode,
-                    x_axis, y_axis, color_var, color_map, size,
-                    vmin, vmax, zmin, zmax,
-                    hidden_opacity, fontsize, bathymetry, station,
-                    cruise_track_selection, relayoutData):
-        # Load data
+    def update_main_plot(
+        dataset, csv_file, sub_sample, sampling_mode,
+        x_axis, y_axis, color_var, color_map, size,
+        vmin, vmax, zmin, zmax,
+        hidden_opacity, fontsize, bathymetry, station,
+        cruise_track_selection, relayoutData
+    ):
+        # ------------------------------------------------------------------
+        # 1. Ignore irrelevant relayout events
+        # ------------------------------------------------------------------
         trigger = ctx.triggered_id
         if trigger == "main_plot" and relayoutData:
             valid_relayout = any(
@@ -1424,6 +1439,9 @@ def register_callbacks(app: dash.Dash) -> None:
             )
             if not valid_relayout:
                 raise dash.exceptions.PreventUpdate
+        # ------------------------------------------------------------------
+        # 2. Validate CSV input
+        # ------------------------------------------------------------------
         if not csv_file:
             return go.Figure().add_annotation(
                 text="No CSV found",
@@ -1431,12 +1449,24 @@ def register_callbacks(app: dash.Dash) -> None:
                 y=0.5,
                 showarrow=False
             )
-        df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
-        # Apply cruise track selection
+        # ------------------------------------------------------------------
+        # 3. Load and optionally filter data
+        # ------------------------------------------------------------------
+        df = load_data(
+            dataset,
+            csv_file,
+            sub_sample=sub_sample,
+            mode=sampling_mode
+        )
+        # Apply cruise-track point selection, if present.
         if cruise_track_selection and "selected_ids" in cruise_track_selection:
-            ids = np.asarray(cruise_track_selection["selected_ids"], dtype=np.int32)
+            ids = np.asarray(
+                cruise_track_selection["selected_ids"],
+                dtype=np.int32
+            )
             mask = np.isin(df["point_id"].to_numpy(), ids)
             df = df.loc[mask]
+        # Validate that there is plottable data for the requested color variable.
         if df.empty or color_var not in df.columns:
             return go.Figure().add_annotation(
                 text=f"No {color_var} data available",
@@ -1447,10 +1477,16 @@ def register_callbacks(app: dash.Dash) -> None:
                 showarrow=False,
                 font=dict(size=16, color="red")
             )
-        # Resolve selected palette
+        # ------------------------------------------------------------------
+        # 4. Resolve color palette and color scaling
+        # ------------------------------------------------------------------
         palette, palette_type = get_palette(color_map)
-        color_mode = "discrete" if is_discrete_variable(df[color_var]) else "continuous"
-        # Configure color limits
+        color_mode = (
+            "discrete"
+            if is_discrete_variable(df[color_var])
+            else "continuous"
+        )
+        # For numeric color variables, default to robust 5th–95th percentile limits.
         if pd.api.types.is_numeric_dtype(df[color_var]):
             if vmin is None or vmax is None:
                 q = df[color_var].quantile([0.05, 0.95])
@@ -1459,82 +1495,12 @@ def register_callbacks(app: dash.Dash) -> None:
         else:
             palette_type = "discrete"
         fig = go.Figure()
-        # Create scatter plot
+        # ------------------------------------------------------------------
+        # 5. Add scatter traces
+        # ------------------------------------------------------------------
         if color_mode == "continuous":
-            fig.add_trace(go.Scattergl(
-                x=df[x_axis],
-                y=df[y_axis],
-                mode="markers",
-                marker=dict(
-                    size=size,
-                    color=df[color_var],
-                    colorscale=palette,
-                    cmin=vmin,
-                    cmax=vmax,
-                    coloraxis="coloraxis"
-                ),
-                customdata=np.c_[
-                    df["point_id"].astype(np.int32).to_numpy(),
-                    df[color_var].to_numpy()
-                ],
-                hovertemplate=(
-                    f"{x_axis.capitalize()}: %{{x:.2f}}<br>"
-                    f"{y_axis.capitalize()}: %{{y:.2f}}<br>"
-                    f"{color_var.replace('_', ' ').capitalize()}: %{{customdata[1]:.2f}}<extra></extra>"
-                ),
-                showlegend=False,
-            ))
-        else:
-            df = df.copy()
-            # Treat categories and integers as discrete classes.
-            # Each unique value gets its own color. If classes exceed palette length,
-            # colors repeat cyclically.
-            if is_discrete_variable(df[color_var]):
-                if pd.api.types.is_numeric_dtype(df[color_var]):
-                    df["_color_class"] = pd.to_numeric(df[color_var], errors="coerce").round().astype("Int32")
-                else:
-                    df["_color_class"] = df[color_var].astype(str)
-                unique_classes = sorted(
-                    df["_color_class"].dropna().unique(),
-                    key=lambda x: str(x)
-                )
-                legend_title = f"{color_var.replace('_', ' ').capitalize()} ({get_unit(color_var)})"
-                for i, class_value in enumerate(unique_classes):
-                    g = df[df["_color_class"] == class_value]
-                    color = palette[i % len(palette)]
-                    fig.add_trace(go.Scattergl(
-                        x=g[x_axis],
-                        y=g[y_axis],
-                        mode="markers",
-                        marker=dict(
-                            size=size,
-                            color=color
-                        ),
-                        customdata=np.c_[
-                            g["point_id"].astype(np.int32).to_numpy(),
-                            g[color_var].to_numpy()
-                        ],
-                        name=str(class_value),
-                        hovertemplate=(
-                            f"{x_axis.capitalize()}: %{{x}}<br>"
-                            f"{y_axis.capitalize()}: %{{y}}<br>"
-                            f"{color_var.replace('_', ' ').capitalize()}: %{{customdata[1]}}"
-                            "<extra></extra>"
-                        ),
-                        showlegend=True,
-                    ))
-                fig.update_layout(
-                    legend=dict(
-                        title=legend_title,
-                        orientation="v"
-                    )
-                )
-            else:
-                # Float variables stay continuous even if a qualitative palette was selected.
-                # Fall back safely to Viridis.
-                palette = px.colors.sequential.Viridis
-                palette_type = "continuous"
-                fig.add_trace(go.Scattergl(
+            fig.add_trace(
+                go.Scattergl(
                     x=df[x_axis],
                     y=df[y_axis],
                     mode="markers",
@@ -1546,56 +1512,147 @@ def register_callbacks(app: dash.Dash) -> None:
                         cmax=vmax,
                         coloraxis="coloraxis"
                     ),
-                    customdata=np.c_[
-                        df["point_id"].astype(np.int32).to_numpy(),
-                        df[color_var].to_numpy()
-                    ],
+                    customdata=df["point_id"].astype(np.int32).to_numpy(),
                     hovertemplate=(
-                        f"{x_axis.capitalize()}: %{{x}}<br>"
-                        f"{y_axis.capitalize()}: %{{y}}<br>"
-                        f"{color_var.replace('_', ' ').capitalize()}: %{{customdata[1]:.2f}}"
-                        "<extra></extra>"
+                        f"{x_axis.capitalize()}: %{{x:.2f}}<br>"
+                        f"{y_axis.capitalize()}: %{{y:.2f}}<br>"
+                        f"{color_var.replace('_', ' ').capitalize()}: "
+                        "%{marker.color:.2f}"
                     ),
                     showlegend=False,
-                ))
+                )
+            )
+        else:
+            df = df.copy()
+            # Discrete variables get one trace per class.
+            if is_discrete_variable(df[color_var]):
+                if pd.api.types.is_numeric_dtype(df[color_var]):
+                    df["_color_class"] = (
+                        pd.to_numeric(df[color_var], errors="coerce")
+                        .round()
+                        .astype("Int32")
+                    )
+                else:
+                    df["_color_class"] = df[color_var].astype(str)
+                unique_classes = sorted(
+                    df["_color_class"].dropna().unique(),
+                    key=lambda x: str(x)
+                )
+                legend_title = color_var.replace("_", " ").capitalize()
+                for i, class_value in enumerate(unique_classes):
+                    g = df[df["_color_class"] == class_value]
+                    color = palette[i % len(palette)]
+                    fig.add_trace(
+                        go.Scattergl(
+                            x=g[x_axis],
+                            y=g[y_axis],
+                            mode="markers",
+                            marker=dict(
+                                size=size,
+                                color=color
+                            ),
+                            customdata=np.c_[
+                                g["point_id"].astype(np.int32).to_numpy(),
+                                g[color_var].to_numpy()
+                            ],
+                            name=str(class_value),
+                            hovertemplate=(
+                                f"{x_axis.capitalize()}: %{{x}}<br>"
+                                f"{y_axis.capitalize()}: %{{y}}<br>"
+                                f"{legend_title}: %{{customdata[1]}}"
+                                "<extra></extra>"
+                            ),
+                            showlegend=True,
+                        )
+                    )
+                fig.update_layout(
+                    legend=dict(
+                        title=legend_title,
+                        orientation="v"
+                    )
+                )
+            else:
+                # Float variables remain continuous, even when a qualitative
+                # palette was selected. Fall back safely to Viridis.
+                palette = px.colors.sequential.Viridis
+                palette_type = "continuous"
+                fig.add_trace(
+                    go.Scattergl(
+                        x=df[x_axis],
+                        y=df[y_axis],
+                        mode="markers",
+                        marker=dict(
+                            size=size,
+                            color=df[color_var],
+                            colorscale=palette,
+                            cmin=vmin,
+                            cmax=vmax,
+                            coloraxis="coloraxis"
+                        ),
+                        customdata=np.c_[
+                            df["point_id"].astype(np.int32).to_numpy(),
+                            df[color_var].to_numpy()
+                        ],
+                        hovertemplate=(
+                            f"{x_axis.capitalize()}: %{{x}}<br>"
+                            f"{y_axis.capitalize()}: %{{y}}<br>"
+                            f"{color_var.replace('_', ' ').capitalize()}: "
+                            "%{customdata[1]:.2f}"
+                            "<extra></extra>"
+                        ),
+                        showlegend=False,
+                    )
+                )
+        # Shared marker selection styling.
         fig.update_traces(
             marker=dict(size=size),
             selected=dict(marker=dict(opacity=1)),
             unselected=dict(marker=dict(opacity=hidden_opacity))
         )
-        # Axis ranges and tick formatting
+        # ------------------------------------------------------------------
+        # 6. Resolve visible axis ranges and ticks
+        # ------------------------------------------------------------------
         visible_xrange = get_visible_range("xaxis", relayoutData)
         visible_yrange = get_visible_range("yaxis", relayoutData)
+        # -------------------------
         # X axis
-        xticks = xticktext = None
+        # -------------------------
+        xticks = None
+        xticktext = None
         if x_axis == "times":
             x_range = [df["times"].min(), df["times"].max()]
-            xticks = xticktext = None
         elif x_axis in df.columns:
             xmin, xmax = resolve_range(visible_xrange, df[x_axis])
             xticks, digits = dynamic_ticks(xmin, xmax, nticks=6)
+            x_range = [xmin, xmax]
             if x_axis == "latitude":
                 xticktext = [
                     f"{abs(v):.{digits}f}°{'N' if v >= 0 else 'S'}"
                     for v in xticks
                 ]
-                x_range = [xmin, xmax]
             elif x_axis == "longitude":
                 xticktext = [
                     f"{abs(v):.{digits}f}°{'E' if v >= 0 else 'W'}"
                     for v in xticks
                 ]
-                x_range = [xmin, xmax]
-            else:
-                x_range = [xmin, xmax]
         else:
-            x_range = xticks = xticktext = None
+            x_range = None
+            xticks = None
+            xticktext = None
+        # -------------------------
         # Y axis
-        yticks = yticktext = None
+        # -------------------------
+        yticks = None
+        yticktext = None
         ylabel = y_axis.capitalize()
         if y_axis in df.columns:
             if y_axis == "depth":
-                ymin, ymax = resolve_range(visible_yrange, df[y_axis], zmin, zmax)
+                ymin, ymax = resolve_range(
+                    visible_yrange,
+                    df[y_axis],
+                    zmin,
+                    zmax
+                )
                 ylabel = "Depth (m)"
                 y_range = [ymax, ymin]
             else:
@@ -1615,27 +1672,36 @@ def register_callbacks(app: dash.Dash) -> None:
                     ]
         else:
             y_range = None
-        # Global dynamic font size
+        # ------------------------------------------------------------------
+        # 7. Resolve dynamic font size
+        # ------------------------------------------------------------------
         if fontsize:
             base_font = fontsize
+        elif x_axis == "times" and x_range is not None:
+            try:
+                span_days = (
+                    pd.to_datetime(x_range[1])
+                    - pd.to_datetime(x_range[0])
+                ).days
+                span_days = max(span_days, 1)
+                base_font = max(
+                    7,
+                    min(14, 10 - 0.5 * np.log10(span_days))
+                )
+            except Exception:
+                base_font = 10
         else:
-            if x_axis == "times" and x_range is not None:
-                try:
-                    span_days = (
-                        pd.to_datetime(x_range[1]) -
-                        pd.to_datetime(x_range[0])
-                    ).days
-                    span_days = max(span_days, 1)
-                    base_font = max(7, min(14, 10 - 0.5 * np.log10(span_days)))
-                except Exception:
-                    base_font = 10
+            if x_range is not None and np.all(np.isfinite(x_range)):
+                span = abs(x_range[1] - x_range[0])
             else:
-                if x_range is not None and np.all(np.isfinite(x_range)):
-                    span = abs(x_range[1] - x_range[0])
-                else:
-                    span = 1
-                base_font = max(7, min(14, 10 - np.log10(span + 1e-6)))
-        # Layout
+                span = 1
+            base_font = max(
+                7,
+                min(14, 10 - np.log10(span + 1e-6))
+            )
+        # ------------------------------------------------------------------
+        # 8. Build base layout
+        # ------------------------------------------------------------------
         layout_kwargs = dict(
             dragmode="zoom",
             uirevision=f"{dataset}-{csv_file}",
@@ -1677,11 +1743,15 @@ def register_callbacks(app: dash.Dash) -> None:
                 tickcolor="black",
             ),
         )
+        # Add shared continuous color axis configuration.
         if color_mode == "continuous":
             layout_kwargs["coloraxis"] = dict(
                 colorbar=dict(
                     title=dict(
-                        text=f"{color_var.replace('_', ' ').capitalize()} ({get_unit(color_var)})",
+                        text=(
+                            f"{color_var.replace('_', ' ').capitalize()} "
+                            f"({get_unit(color_var)})"
+                        ),
                         side="bottom",
                         font=dict(size=base_font + 1),
                     ),
@@ -1705,25 +1775,41 @@ def register_callbacks(app: dash.Dash) -> None:
                 cmax=vmax,
             )
         fig.update_layout(**layout_kwargs)
-        # Bathymetry overlay
-        if "True" in bathymetry and bathy is not None and x_axis == "latitude" and y_axis == "depth":
+        # ------------------------------------------------------------------
+        # 9. Optional bathymetry overlay
+        # ------------------------------------------------------------------
+        if (
+            "True" in bathymetry
+            and bathy is not None
+            and x_axis == "latitude"
+            and y_axis == "depth"
+        ):
             bathy_mask = (
-                (bathy["latitude"] <= df["latitude"].max() + 0.01) &
-                (bathy["latitude"] >= df["latitude"].min() - 0.01)
+                (bathy["latitude"] <= df["latitude"].max() + 0.01)
+                & (bathy["latitude"] >= df["latitude"].min() - 0.01)
             )
-            fig.add_trace(go.Scatter(
-                x=bathy["latitude"][bathy_mask],
-                y=bathy["bottom_depth_meters"][bathy_mask],
-                mode="lines",
-                line=dict(color="black", width=1),
-                name="Bathymetry",
-                showlegend=False,
-            ))
-        # Station overlay
-        if "True" in station and stations is not None and x_axis == "latitude" and y_axis == "depth":
+            fig.add_trace(
+                go.Scatter(
+                    x=bathy["latitude"][bathy_mask],
+                    y=bathy["bottom_depth_meters"][bathy_mask],
+                    mode="lines",
+                    line=dict(color="black", width=1),
+                    name="Bathymetry",
+                    showlegend=False,
+                )
+            )
+        # ------------------------------------------------------------------
+        # 10. Optional station overlay
+        # ------------------------------------------------------------------
+        if (
+            "True" in station
+            and stations is not None
+            and x_axis == "latitude"
+            and y_axis == "depth"
+        ):
             station_mask = (
-                (stations["latitude"] <= df["latitude"].max() + 0.1) &
-                (stations["latitude"] >= df["latitude"].min() - 0.1)
+                (stations["latitude"] <= df["latitude"].max() + 0.1)
+                & (stations["latitude"] >= df["latitude"].min() - 0.1)
             )
             visible_stations = stations[station_mask]
             station_labels = [
@@ -1761,7 +1847,6 @@ def register_callbacks(app: dash.Dash) -> None:
                 shapes=station_lines
             )
         return fig
-
     # ============================================================
     # === Time–Salinity (T–S) Diagram Update ===
     # ============================================================
@@ -1977,95 +2062,115 @@ def register_callbacks(app: dash.Dash) -> None:
         ]
     )
     def update_profile_plot(dataset, csv_file, sub_sample, sampling_mode,
-                            color_var, color_map, fontsize, selected_data, cruise_track_selection):
+                            color_var, color_map, fontsize,
+                            selected_data, cruise_track_selection):
         """
-        Update the vertical profile plot (Depth vs. Selected Variable).
+        Update the vertical profile plot.
         Behavior:
-            - Cruise track selection is applied FIRST (primary filter)
-            - Scatter selection expands to FULL profiles (secondary filter)
-            - If 'cast' exists: plot raw casts (each cast one color)
-            - If 'cast' does NOT exist: fallback to median profile
+            - Cruise track selection is applied first.
+            - Main-plot selection expands to full casts when cast exists.
+            - If cast exists, plot each cast as a separate profile.
+            - Profile colors always use qualitative palettes.
+            - If cast does not exist, plot a median profile with percentile envelope.
         """
         fig = go.Figure()
-        # --------------------------------------------------------
-        # 1️⃣ Load Dataset
-        # --------------------------------------------------------
         if not csv_file:
-            fig.add_annotation(text="⚠️ No CSV found", x=0.5, y=0.5, showarrow=False)
+            fig.add_annotation(
+                text="No CSV found",
+                x=0.5,
+                y=0.5,
+                showarrow=False,
+            )
             return fig
         df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
         if not color_var or color_var not in df.columns:
             fig.add_annotation(
-                text="⚠️ No variable selected",
-                x=0.5, y=0.5, xref="paper", yref="paper",
-                showarrow=False, font=dict(size=16, color="red")
+                text="No variable selected",
+                x=0.5,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(size=16, color="red"),
             )
             return fig
-        # --------------------------------------------------------
-        # 2️⃣ Apply Cruise Track Selection (Primary Filter)
-        # --------------------------------------------------------
         if cruise_track_selection and "selected_ids" in cruise_track_selection:
             ids = np.asarray(cruise_track_selection["selected_ids"], dtype=np.int32)
             mask = np.isin(df["point_id"].to_numpy(), ids)
             df = df.loc[mask]
-        # --------------------------------------------------------
-        # 3️⃣ Expand scatter selection -> full profiles OR subset
-        # --------------------------------------------------------
         selected_ids = None
         if isinstance(selected_data, dict):
             selected_ids = selected_data.get("selected_ids")
         if selected_ids:
             ids = np.asarray(selected_ids, dtype=np.int32)
             if "cast" in df.columns:
-                mask = np.isin(df.index.values, ids)
-                selected_profiles = df.loc[mask, "cast"].dropna().unique()
-                if len(selected_profiles) > 0:
-                    cast_mask = np.isin(df["cast"].to_numpy(), selected_profiles)
+                mask = np.isin(df["point_id"].to_numpy(), ids)
+                selected_casts = df.loc[mask, "cast"].dropna().unique()
+                if len(selected_casts) > 0:
+                    cast_mask = np.isin(df["cast"].to_numpy(), selected_casts)
                     df = df.loc[cast_mask]
             else:
-                mask = np.isin(df.index.values, ids)
+                mask = np.isin(df["point_id"].to_numpy(), ids)
                 df = df.loc[mask]
-        # --------------------------------------------------------
-        # 4️⃣ Clean bad values
-        # --------------------------------------------------------
+        required_cols = ["depth", color_var, "latitude", "longitude"]
+        for col in required_cols:
+            if col not in df.columns:
+                fig.add_annotation(
+                    text=f"No {col} data available",
+                    x=0.5,
+                    y=0.5,
+                    xref="paper",
+                    yref="paper",
+                    showarrow=False,
+                    font=dict(size=16, color="red"),
+                )
+                return fig
         df = df.loc[
-            np.isfinite(df.get('depth', np.nan)) &
-            np.isfinite(df.get(color_var, np.nan)) &
-            np.isfinite(df.get('latitude', np.nan)) &
-            np.isfinite(df.get('longitude', np.nan))
+            np.isfinite(df["depth"]) &
+            np.isfinite(df[color_var]) &
+            np.isfinite(df["latitude"]) &
+            np.isfinite(df["longitude"])
         ]
         if df.empty:
             fig.add_annotation(
-                text=f"⚠️ No {color_var} data available",
-                x=0.5, y=0.5, xref="paper", yref="paper",
-                showarrow=False, font=dict(size=16, color="red")
+                text=f"No {color_var} data available",
+                x=0.5,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(size=16, color="red"),
             )
             return fig
-        # --------------------------------------------------------
-        # 5️⃣ Build Profile Plot
-        # --------------------------------------------------------
+        
         if "cast" in df.columns and df["cast"].notna().any():
             df = df.copy()
             cast_numeric = pd.to_numeric(df["cast"], errors="coerce")
             df = df.loc[cast_numeric.notna()].copy()
-            df["cast"] = cast_numeric.loc[df.index].round().astype("Int32")
-            unique_profiles = sorted(df["cast"].dropna().unique())
-            palette, palette_type = get_palette(color_map)
-            n = len(unique_profiles)
-            if palette_type == "discrete":
-                colors = [palette[i % len(palette)] for i in range(n)]
-            else:
-                colors = sample_colorscale(
-                    palette,
-                    [i / max(n - 1, 1) for i in range(n)]
+            if df.empty:
+                fig.add_annotation(
+                    text="No valid cast data available",
+                    x=0.5,
+                    y=0.5,
+                    xref="paper",
+                    yref="paper",
+                    showarrow=False,
+                    font=dict(size=16, color="red"),
                 )
-            cast_color_map = {
-                prof: colors[i]
-                for i, prof in enumerate(unique_profiles)
+                return fig
+            df["cast"] = cast_numeric.loc[df.index].round().astype("Int32")
+            unique_casts = sorted(
+                df["cast"].dropna().unique(),
+                key=lambda x: int(x),
+            )
+            palette,_ = get_palette(color_map)
+            cast_colors = {
+                cast_id: palette[i % len(palette)]
+                for i, cast_id in enumerate(unique_casts)
             }
-            for prof, g in df.groupby("cast", dropna=True):
+            for cast_id, g in df.groupby("cast", dropna=True):
                 g = g.sort_values("depth")
-                color = cast_color_map.get(prof, "rgba(0,0,0,0.6)")
+                color = cast_colors.get(cast_id, "rgba(0,0,0,0.6)")
                 fig.add_trace(
                     go.Scatter(
                         x=g[color_var],
@@ -2073,22 +2178,20 @@ def register_callbacks(app: dash.Dash) -> None:
                         mode="lines+markers",
                         line=dict(color=color, width=2),
                         marker=dict(size=4, color=color),
-                        name=f"Cast {int(prof)}",
+                        name=f"Cast {int(cast_id)}",
                         customdata=np.c_[g["latitude"], g["longitude"]],
                         hovertemplate=(
-                            f"<b>Cast:</b> {int(prof)}<br>"
+                            f"<b>Cast:</b> {int(cast_id)}<br>"
                             "<b>Depth:</b> %{y:.1f} m<br>"
-                            f"<b>{color_var.replace('_',' ').capitalize()}:</b> %{{x:.2f}} {get_unit(color_var)}<br>"
+                            f"<b>{color_var.replace('_', ' ').capitalize()}:</b> "
+                            f"%{{x:.2f}} {get_unit(color_var)}<br>"
                             "<b>Latitude:</b> %{customdata[0]:.4f}<br>"
                             "<b>Longitude:</b> %{customdata[1]:.4f}<br>"
                             "<extra></extra>"
-                        )
+                        ),
                     )
                 )
         else:
-            # --------------------------------------------------------
-            # 🔹 Bin profiles to 2 m depth bins
-            # --------------------------------------------------------
             step = 2
             depth_bin = np.floor((df["depth"] + step / 2) / step) * step
             summary = (
@@ -2105,9 +2208,6 @@ def register_callbacks(app: dash.Dash) -> None:
                 .reset_index(drop=True)
                 .sort_values("depth")
             )
-            # --------------------------------------------------------
-            # 🔹 Percentile envelope (5–95%)
-            # --------------------------------------------------------
             fig.add_trace(
                 go.Scatter(
                     x=np.concatenate([summary["q05"], summary["q95"][::-1]]),
@@ -2119,9 +2219,6 @@ def register_callbacks(app: dash.Dash) -> None:
                     showlegend=False,
                 )
             )
-            # --------------------------------------------------------
-            # 🔹 Median profile line
-            # --------------------------------------------------------
             fig.add_trace(
                 go.Scatter(
                     x=summary["median"],
@@ -2133,35 +2230,48 @@ def register_callbacks(app: dash.Dash) -> None:
                     customdata=summary[["latitude", "longitude"]].to_numpy(),
                     hovertemplate=(
                         "<b>Depth:</b> %{y:.1f} m<br>"
-                        f"<b>{color_var.replace('_',' ').capitalize()}:</b> %{{x:.2f}} {get_unit(color_var)}<br>"
+                        f"<b>{color_var.replace('_', ' ').capitalize()}:</b> "
+                        f"%{{x:.2f}} {get_unit(color_var)}<br>"
                         "<b>Latitude:</b> %{customdata[0]:.4f}<br>"
                         "<b>Longitude:</b> %{customdata[1]:.4f}<br>"
                         "<extra></extra>"
                     ),
                 )
             )
-        # --------------------------------------------------------
-        # 6️⃣ Layout & Axes (auto reverse depth)
-        # --------------------------------------------------------
         fig.update_layout(
             dragmode="zoom",
-            paper_bgcolor='white',
-            plot_bgcolor='white',
-            font=dict(color='black',size=fontsize if fontsize else 10),
-            legend=dict(title="Cast")
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            font=dict(
+                color="black",
+                size=fontsize if fontsize else 10,
+            ),
+            legend=dict(title="Cast"),
         )
         fig.update_yaxes(
-            autorange="reversed",   # depth increases downward
-            title='Depth (m)',
-            showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
-            showline=True, linecolor='black', linewidth=1,
-            mirror=True, ticks='outside', tickwidth=1, tickcolor='black'
+            autorange="reversed",
+            title="Depth (m)",
+            showgrid=True,
+            gridcolor="rgba(0, 0, 0, 0.1)",
+            showline=True,
+            linecolor="black",
+            linewidth=1,
+            mirror=True,
+            ticks="outside",
+            tickwidth=1,
+            tickcolor="black",
         )
         fig.update_xaxes(
-            title=f'{color_var.replace("_", " ").capitalize()} ({get_unit(color_var)})',
-            showgrid=True, gridcolor='rgba(0, 0, 0, 0.1)',
-            showline=True, linecolor='black', linewidth=1,
-            mirror=True, ticks='outside', tickwidth=1, tickcolor='black'
+            title=f"{color_var.replace('_', ' ').capitalize()} ({get_unit(color_var)})",
+            showgrid=True,
+            gridcolor="rgba(0, 0, 0, 0.1)",
+            showline=True,
+            linecolor="black",
+            linewidth=1,
+            mirror=True,
+            ticks="outside",
+            tickwidth=1,
+            tickcolor="black",
         )
         return fig
 
@@ -2186,7 +2296,7 @@ def register_callbacks(app: dash.Dash) -> None:
             return 'Click on a point to see full details.'
         try:
             # Get clicked point_id
-            point_id = clickData["points"][0]["customdata"][0]
+            point_id = get_point_id_from_customdata(clickData["points"][0]["customdata"])
             # Load dataframe
             df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
             # Retrieve full row
