@@ -1,5 +1,33 @@
 # ======================
-# Python artifacts
+# Ignore everything by default
+# ======================
+*
+
+# ======================
+# Allow directories we care about
+# ======================
+!src/
+!assets/
+!dash_data/misc/
+
+# Allow contents of those directories
+!src/**
+!assets/**
+!dash_data/misc/**
+
+# ======================
+# Allow root project files
+# ======================
+!README.md
+!LICENSE
+!.gitignore
+!pyproject.toml
+!Dockerfile
+!docker-compose.yml
+!.dockerignore
+
+# ======================
+# Python artifacts (still useful inside allowed dirs)
 # ======================
 __pycache__/
 *.pyc
@@ -37,48 +65,3 @@ dash_uploads/
 .idea/
 .DS_Store
 Thumbs.db
-
-# ======================
-# Large data / outputs
-# ======================
-raw_data/
-merged_data/
-indexes/
-media_list/
-modified_CAL/
-dash_data/data/
-old_code/
-
-# ======================
-# Calibration / binary
-# ======================
-*.CAL
-*.mat
-
-# ======================
-# CSV outputs (ignore all, then allow specific)
-# ======================
-*.csv
-!dash_data/misc/**/*.csv
-
-# ======================
-# Explicitly keep project structure
-# ======================
-!src/
-!src/**
-!assets/
-!assets/**
-!dash_data/
-!dash_data/misc/
-!dash_data/misc/**
-
-# ======================
-# Root project files
-# ======================
-!pyproject.toml
-!README.md
-!LICENSE
-!.gitignore
-!.dockerignore
-!Dockerfile
-!docker-compose.yml
