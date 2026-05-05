@@ -8,33 +8,12 @@ This package includes sensor-processing utilities, CTD/profile handling, image-l
 
 ---
 
-## Repository layout
-
-```text
-src/
-├── stingray/
-│   ├── cli/              # Command-line entry points
-│   ├── config/           # Column definitions and unit mappings
-│   ├── dashboard/        # Dash dashboard application
-│   ├── data_reference/   # Reference files used by processing routines
-│   ├── images/           # Image/frame/media-link helper scripts
-│   ├── io/               # CSV, SUNA, and indexing utilities
-│   ├── logging/          # Logging setup
-│   ├── profiles/         # Profile/cast identification utilities
-│   ├── sensors/          # Sensor-specific processing modules
-│   ├── stats/            # Statistical utilities
-│   ├── utils/            # Spatial, temporal, and gridding utilities
-└── ctd_tools/
-```
-
----
-
 ## Installation
 
 ### Clone the repository
 
 ```bash
-git clone https://github.com/anhph95/StingrayTools.git
+git clone https://github.com/anhph95/stingraytools.git
 cd StingrayTools
 ```
 
@@ -66,7 +45,7 @@ pip install -e .
 ### Process Stingray sensor data
 
 ```bash
-python -m stingray.process \
+python -m stingray sensors merge \
   --cruise EN706 \
   --start YYYY-MM-DD \
   --end YYYY-MM-DD \
@@ -145,7 +124,7 @@ dash_data/
 ### Run the dashboard locally
 
 ```bash
-python -m stingray.dashboard.app --host 0.0.0.0 --port 8050
+python -m stingray dashboard run --host 0.0.0.0 --port 8050
 ```
 
 Then open:
@@ -232,10 +211,6 @@ Useful checks:
 python -m stingray.process --help
 python -m stingray.dashboard.app --help
 ```
-
-Generated folders such as `__pycache__/`, `.egg-info/`, and local data/output directories should generally not be committed unless intentionally tracked.
-
----
 
 ## License
 
