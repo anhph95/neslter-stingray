@@ -19,12 +19,12 @@ DEFAULT_MAX_WORKERS = max(1, min(8, SLURM_CPUS - 1 if SLURM_CPUS > 1 else 1))
 VIDEO_TYPE_CONFIG = {
     "ISIIS2": {
         "fps": 12.0,
-        "out_dir": "/proj/nes-lter/Stingray/data/media_list/ISIIS2",
+        "out_dir": "media_list/ISIIS2",
         "folder_name": "Basler_a2a2840-14gmBAS",
     },
     "ISIIS1": {
         "fps": 15.0,
-        "out_dir": "/proj/nes-lter/Stingray/data/media_list/ISIIS1",
+        "out_dir": "media_list/ISIIS1",
         "folder_name": "Basler_avA2300-25gm",
     },
 }
@@ -284,7 +284,7 @@ def main():
     fps, out_dir, folder_name = resolve_config(args.video_type, args.fps, args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
     cruise = args.cruise
-    media_dir = f"{args.base_media_dir}/NESLTER_{cruise}/{folder_name}"
+    media_dir = Path(args.base_media_dir) / f"NESLTER_{cruise}" / folder_name
     if not media_dir.is_dir():
         raise FileNotFoundError(f"Media directory not found: {media_dir}")
     log(f"Processing cruise: {cruise}")
