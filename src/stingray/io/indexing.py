@@ -110,7 +110,6 @@ def load_or_build_file_index(
     out_file = Path(out_file)
 
     if out_file.exists() and not overwrite:
-        logger.info("Using cached index: %s", out_file)
         df = pd.read_csv(out_file, parse_dates=["datetime"])
     else:
         if overwrite:

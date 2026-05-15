@@ -76,7 +76,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["stingray*", "ctd_tools*"]
+include = ["stingray*", "ctdtools*"]
 
 [tool.setuptools.package-data]
 stingray = [

@@ -128,6 +128,11 @@ def ies80(s, t, p=0):
 # ============================================
 # File Utilities
 # ============================================
+def get_link(media, frame):
+    if media is not None and frame is not None:
+        return f"https://stingraydash.whoi.edu/fv/frames/{media}/{frame}?format=png"
+    return None
+
 def scan_datasets() -> list[str]:
     """
     Returns a list of available dataset folders under DATA_DIR.
@@ -313,7 +318,7 @@ def load_data(dataset: str, file_name: str, sub_sample: int | None = None, mode=
         # -----------------------------------------------------
         numeric_cols = [
             c for c in dfo.select_dtypes(include=[np.number]).columns
-            if c not in ("point_id", "_group")
+            if c not in ("point_id", "_group", "frame", "frame_2")
         ]
         meta_cols = [
             c for c in dfo.columns
@@ -1000,8 +1005,13 @@ def register_callbacks(app: dash.Dash) -> None:
         if not dataset:
             return [], None
         triggered = ctx.triggered_id
-        if triggered in ("refresh-button", "dataset_selector"):
-            global DATA_CACHE, AVERAGE_CACHE
+        if triggered == "refresh-button":
+            DATA_CACHE.clear()
+            AVERAGE_CACHE.clear()
+            CSV_HEADER_CACHE.clear()
+            SENSOR_VAR_CACHE.clear()
+            load_csv.cache_clear()
+        elif triggered == "dataset_selector":
             DATA_CACHE.clear()
             AVERAGE_CACHE.clear()
         csv_files = get_csv_files(dataset)
@@ -1034,11 +1044,16 @@ def register_callbacks(app: dash.Dash) -> None:
         prevent_initial_call=True
     )
     def update_color_variable_options(dataset, csv_file,
-                                    current_color,
-                                    current_ts_color,
-                                    current_profile_var,
+                                  current_color,
+                                  current_ts_color,
+                                  current_profile_var,
                                     search):
-        if not csv_file:
+        trigger = ctx.triggered_id
+        # Only rebuild variable dropdowns when the selected dataset/file changes.
+        # This prevents TS/profile variable changes from cascading into other plots.
+        if trigger not in ("dataset_selector", "csv_selector"):
+            raise dash.exceptions.PreventUpdate
+        if not dataset or not csv_file:
             return [], None, [], None, [], None
         csv_path = DATA_DIR / dataset / f"{csv_file}.csv"
         if csv_path not in SENSOR_VAR_CACHE:
@@ -1052,6 +1067,7 @@ def register_callbacks(app: dash.Dash) -> None:
         options = [{'label': v.capitalize(), 'value': v} for v in sensor_vars]
         default_color = "temperature" if "temperature" in sensor_vars else (sensor_vars[0] if sensor_vars else None)
         ts_candidates = [v for v in sensor_vars if v not in ['temperature', 'salinity']]
+        ts_options = [{'label': v.capitalize(), 'value': v} for v in ts_candidates]
         default_ts = "chlorophyll" if "chlorophyll" in ts_candidates else (ts_candidates[0] if ts_candidates else None)
         default_profile = "temperature" if "temperature" in sensor_vars else (sensor_vars[0] if sensor_vars else None)
         params = parse_qs(urlparse(search or "").query)
@@ -1076,7 +1092,7 @@ def register_callbacks(app: dash.Dash) -> None:
             profile_val = current_profile_var
         else:
             profile_val = default_profile
-        return options, color_val, options, ts_val, options, profile_val
+        return options, color_val, ts_options, ts_val, options, profile_val
 
     # --- Callback: Reset main plot color limits when color variable changes ---
     @app.callback(
@@ -1286,19 +1302,24 @@ def register_callbacks(app: dash.Dash) -> None:
             raise dash.exceptions.PreventUpdate
         prev = prev or {}
         trigger = ctx.triggered_id
-        # If dataset/file actually changed (not just a URL rewrite), reset to all ids
-        last_key = prev.get("_key")
         this_key = f"{dataset}/{csv_file}/{sub_sample}/{sampling_mode}"
+        last_key = prev.get("_key")
+        df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
         if trigger in ("dataset_selector", "csv_selector", "sub_sample", "sampling_mode"):
             if last_key == this_key:
-                return prev  # no real change → keep selection
-            df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
+                return prev
             return {"selected_ids": df.index.astype(int).tolist(), "_key": this_key}
         if trigger == "cruise_track":
-            if not selectedData or not selectedData.get("points"):
-                raise dash.exceptions.PreventUpdate
-            ids = [int(p["meta"]) for p in selectedData["points"] if p.get("meta") is not None]
-            return {"selected_ids": ids, "_key": this_key}
+            if selectedData and selectedData.get("points"):
+                ids = [
+                    int(p["meta"])
+                    for p in selectedData["points"]
+                    if p.get("meta") is not None
+                ]
+                return {"selected_ids": ids, "_key": this_key}
+            # Selection was cleared by resizing/changing the box.
+            # Treat that as "all points selected" so dependent plots update.
+            return {"selected_ids": df.index.astype(int).tolist(), "_key": this_key}
         raise dash.exceptions.PreventUpdate
 
     # --- Callback: Mirror selections between main scatter and TS plots ---
@@ -2288,131 +2309,136 @@ def register_callbacks(app: dash.Dash) -> None:
     )
     def display_click_data(clickData, dataset, csv_file, sub_sample, sampling_mode):
         """
-        Display detailed information about a clicked point in the main scatter plot.
-        Uses point_id to fetch the full row from the server instead of sending
-        all variables through Plotly customdata.
+        Display detailed information for a clicked point in the main scatter plot.
+        Fetches the full row server-side using point_id.
         """
-        if not clickData or 'points' not in clickData or not clickData['points']:
-            return 'Click on a point to see full details.'
+        if not clickData or not clickData.get("points"):
+            return "Click on a point to see full details."
         try:
-            # Get clicked point_id
             point_id = get_point_id_from_customdata(clickData["points"][0]["customdata"])
-            # Load dataframe
             df = load_data(dataset, csv_file, sub_sample=sub_sample, mode=sampling_mode)
-            # Retrieve full row
             if point_id not in df.index:
                 return "Point no longer in filtered dataset."
             row = df.loc[point_id]
-            def clean(v, default=None):
-                if v is None or (isinstance(v, float) and pd.isna(v)) or v == "":
+            def clean(value, default=None):
+                if value is None or value == "":
                     return default
-                return v
-            # Metadata
-            media        = clean(row.get('media'), 'N/A')
-            frame        = clean(row.get('frame'), 'N/A')
-            media_2      = clean(row.get('media_2'), 'N/A')
-            frame_2      = clean(row.get('frame_2'), 'N/A')
-            raw_time     = clean(row.get('times'))
-            latitude     = clean(row.get('latitude'))
-            longitude    = clean(row.get('longitude'))
-            media_link   = clean(row.get('link'))
-            media_link_2 = clean(row.get('link_2'))
-            depth        = clean(row.get('depth'))
-            formatted_time = (
-                pd.to_datetime(raw_time).strftime('%Y-%m-%d %H:%M:%S')
-                if raw_time not in [None, "", pd.NaT] else 'N/A'
-            )
-            lat_display = (
-                f'{latitude:.2f}°'
-                if isinstance(latitude, (int, float)) and pd.notna(latitude)
-                else 'N/A'
-            )
-            lon_display = (
-                f'{longitude:.2f}°'
-                if isinstance(longitude, (int, float)) and pd.notna(longitude)
-                else 'N/A'
-            )
-            depth_display = (
-                f'{depth:.2f} m'
-                if isinstance(depth, (int, float)) and pd.notna(depth)
-                else 'N/A'
-            )
-            # Metadata fields to exclude
-            META_COLS = {
-                'point_id',
-                'media','frame','media_path','id','link',
-                'media_2','frame_2','media_path_2','id_2','link_2',
-                'times','latitude','longitude','depth','timestamp','matdate'
-            }
-            # Build sensor variable display
-            variable_details = []
-            for var in row.index:
-                if var in META_COLS:
-                    continue
-                if var.endswith("_std"):
-                    continue
-                value = row.get(var)
-                if value is None or (isinstance(value, float) and pd.isna(value)):
-                    display_value = 'N/A'
-                elif isinstance(value, (int, float)):
-                    if abs(value) >= 1e6:
-                        display_value = f'{value:.2e}'
-                    elif abs(value) < 1 and value != 0:
-                        display_value = f'{value:.4f}'
-                    else:
-                        display_value = f'{value:,.2f}'
-                else:
-                    display_value = str(value)
-                variable_details.append(
-                    html.Div([
-                        html.Span(
-                            f'📈 {var.replace("_", " ").capitalize()} ({get_unit(var)}):',
-                            style={'flex': '7', 'text-align': 'left'}
-                        ),
-                        html.Span(
-                            display_value,
-                            style={'flex': '3', 'text-align': 'right'}
-                        )
+                if pd.isna(value):
+                    return default
+                return value
+            def format_number(value, suffix="", precision=2):
+                value = clean(value)
+                if value is None:
+                    return "N/A"
+                try:
+                    return f"{float(value):.{precision}f}{suffix}"
+                except (TypeError, ValueError):
+                    return "N/A"
+            def format_time(value):
+                value = clean(value)
+                if value is None:
+                    return "N/A"
+                timestamp = pd.to_datetime(value, errors="coerce")
+                if pd.isna(timestamp):
+                    return "N/A"
+                return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            def make_media_link(media_value, frame_value):
+                media_value = clean(media_value)
+                frame_value = clean(frame_value)
+                if media_value is None or frame_value is None:
+                    return "N/A", None
+                try:
+                    frame_int = int(frame_value)
+                except (TypeError, ValueError):
+                    return str(media_value), None
+                label = f"{media_value}_{frame_int}"
+                href = get_link(media_value, frame_int)
+                return label, href
+            def info_row(label, value):
+                return html.Div(
+                    [
+                        html.Span(label),
+                        html.Span(value),
                     ],
-                    style={
-                        'display': 'flex',
-                        'justify-content': 'space-between',
-                        'width': '100%'
-                    })
+                    style={"display": "flex", "justify-content": "space-between"},
                 )
-            return html.Div([
-                html.Div([
-                    html.Span('📽️ ISIIS 1:', style={'flex': '3'}),
-                    html.A(media, href=media_link, target='_blank',
-                        style={'flex': '7', 'text-align': 'right'})
-                ], style={'display': 'flex', 'justify-content': 'space-between'}),
-                html.Div([
-                    html.Span('📽️ ISIIS 2:', style={'flex': '3'}),
-                    html.A(media_2, href=media_link_2, target='_blank',
-                        style={'flex': '7', 'text-align': 'right'})
-                ], style={'display': 'flex', 'justify-content': 'space-between'}),
-                html.Div([
-                    html.Span('⏳ Time:'),
-                    html.Span(formatted_time)
-                ], style={'display': 'flex', 'justify-content': 'space-between'}),
-                html.Div([
-                    html.Span('🌍 Latitude:'),
-                    html.Span(lat_display)
-                ], style={'display': 'flex', 'justify-content': 'space-between'}),
-                html.Div([
-                    html.Span('🌍 Longitude:'),
-                    html.Span(lon_display)
-                ], style={'display': 'flex', 'justify-content': 'space-between'}),
-                html.Div([
-                    html.Span('🌊 Depth:'),
-                    html.Span(depth_display)
-                ], style={'display': 'flex', 'justify-content': 'space-between'}),
-                html.Hr(),
-                *variable_details
-            ])
+            def link_row(label, link_text, href):
+                value = (
+                    html.A(
+                        link_text,
+                        href=href,
+                        target="_blank",
+                        style={"flex": "7", "text-align": "right"},
+                    )
+                    if href
+                    else html.Span(
+                        link_text,
+                        style={"flex": "7", "text-align": "right"},
+                    )
+                )
+                return html.Div(
+                    [
+                        html.Span(label, style={"flex": "3"}),
+                        value,
+                    ],
+                    style={"display": "flex", "justify-content": "space-between"},
+                )
+            def format_sensor_value(value):
+                value = clean(value, "N/A")
+                if value == "N/A":
+                    return value
+                if isinstance(value, (int, float, np.integer, np.floating)):
+                    if abs(value) >= 1e6:
+                        return f"{value:.2e}"
+                    if abs(value) < 1 and value != 0:
+                        return f"{value:.4f}"
+                    return f"{value:,.2f}"
+                return str(value)
+            media_1_label, media_1_link = make_media_link(row.get("media"), row.get("frame"))
+            media_2_label, media_2_link = make_media_link(row.get("media_2"), row.get("frame_2"))
+            meta_cols = {
+                "point_id",
+                "media", "frame", "media_path", "id", "link",
+                "media_2", "frame_2", "media_path_2", "id_2", "link_2",
+                "times", "latitude", "longitude", "depth", "timestamp", "matdate",
+            }
+            variable_details = []
+            for var, value in row.items():
+                if var in meta_cols or var.endswith("_std"):
+                    continue
+                variable_details.append(
+                    html.Div(
+                        [
+                            html.Span(
+                                f"📈 {var.replace('_', ' ').capitalize()} ({get_unit(var)}):",
+                                style={"flex": "7", "text-align": "left"},
+                            ),
+                            html.Span(
+                                format_sensor_value(value),
+                                style={"flex": "3", "text-align": "right"},
+                            ),
+                        ],
+                        style={
+                            "display": "flex",
+                            "justify-content": "space-between",
+                            "width": "100%",
+                        },
+                    )
+                )
+            return html.Div(
+                [
+                    link_row("📽️ ISIIS 1:", media_1_label, media_1_link),
+                    link_row("📽️ ISIIS 2:", media_2_label, media_2_link),
+                    info_row("⏳ Time:", format_time(row.get("times"))),
+                    info_row("🌍 Latitude:", format_number(row.get("latitude"), "°")),
+                    info_row("🌍 Longitude:", format_number(row.get("longitude"), "°")),
+                    info_row("🌊 Depth:", format_number(row.get("depth"), " m")),
+                    html.Hr(),
+                    *variable_details,
+                ]
+            )
         except Exception as e:
-            return f'⚠️ Error processing click data: {str(e)}'
-
+            return f"⚠️ Error processing click data: {str(e)}"
 
 # ============================================
 # App factory, CLI, and WSGI entrypoints

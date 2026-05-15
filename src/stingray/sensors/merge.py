@@ -24,7 +24,6 @@ from stingray.profiles.identify import identify_profiles
 
 logger = logging.getLogger(__name__)
 
-
 def merge_sensors(
     cruise: str,
     start: str,
@@ -35,7 +34,26 @@ def merge_sensors(
     out_dir: str | Path = "dash_data/data/stingray/",
     media_list_dirs: list[str] | None = None,
     overwrite_index: bool = False,
+    suna_cal_file: str | Path | None = None,
+    suna_cal_dir: str | Path | None = None,
 ) -> Path | None:
+    # Logging the function entry and parameters for better traceability.
+    logger.info(
+        "Merging sensors data | cruise=%s start=%s end=%s root=%s cal_year=%s "
+        "time_bin_seconds=%s out_dir=%s overwrite_index=%s "
+        "suna_cal_file=%s suna_cal_dir=%s media_dirs=%s",
+        cruise,
+        start,
+        end,
+        root,
+        cal_year,
+        time_bin_seconds,
+        out_dir,
+        overwrite_index,
+        suna_cal_file,
+        suna_cal_dir,
+        media_list_dirs,
+    )
     if media_list_dirs is None:
         media_list_dirs = ["media_list/ISIIS1", "media_list/ISIIS2"]
 
@@ -51,12 +69,11 @@ def merge_sensors(
     # -------------------------
     # LOAD RAW SENSORS
     # -------------------------
+    logger.info("Scanning raw sensor files...")
     sensor_names = ["CTD", "DVL", "Fluorometer", "GPS", "Oxygen", "PAR", "SUNA"]
     sensors = {}
        
     for name in sensor_names:
-        logger.info("Scanning raw %s files...", name)
-
         idx = load_or_build_file_index(
             root / name,
             Path("indexes") / f"{name}_index.csv",
@@ -76,7 +93,7 @@ def merge_sensors(
     # -------------------------
     # DEFINE TIME GRID FROM CTD
     # -------------------------
-    logger.info("Defining time grid from CTD...")
+    logger.info("Gridding all sensors to %s-second bins...", time_bin_seconds)
     ctd = sensors["ctd"].copy()
 
     if ctd.empty:
@@ -90,7 +107,6 @@ def merge_sensors(
     # -------------------------
     # ATTACH time_bin TO ALL SENSORS
     # -------------------------
-    logger.info("Gridding all sensors...")
     for key, df in sensors.items():
         if df.empty:
             df["time_bin"] = np.nan
@@ -106,7 +122,6 @@ def merge_sensors(
     # -------------------------
     # CTD BLOCK
     # -------------------------
-    logger.info("Processing CTD...")
     ctd = sensors["ctd"]
 
     ctd["density"] = density_ies80(
@@ -136,7 +151,6 @@ def merge_sensors(
     # -------------------------
     # GPS BLOCK
     # -------------------------
-    logger.info("Processing GPS...")
     gps = sensors["gps"]
 
     if not gps.empty:
@@ -160,7 +174,6 @@ def merge_sensors(
     # -------------------------
     # DVL BLOCK
     # -------------------------
-    logger.info("Processing DVL...")
     dvl = sensors["dvl"]
 
     dvl_agg = (
@@ -181,7 +194,6 @@ def merge_sensors(
     # -------------------------
     # FLUOROMETER BLOCK
     # -------------------------
-    logger.info("Processing Fluorometer...")
     fluoro = sensors["fluorometer"]
 
     if not fluoro.empty:
@@ -200,12 +212,11 @@ def merge_sensors(
         .agg({"Chlorophyll": "median", "Backscattering": "median"})
     )
 
-    logger.info("Fluoro bins: %s", len(fluoro_agg))
+    logger.info("Fluorometer bins: %s", len(fluoro_agg))
 
     # -------------------------
     # OXYGEN BLOCK
     # -------------------------
-    logger.info("Processing Oxygen...")
     oxygen = sensors["oxygen"]
 
     oxygen_agg = (
@@ -219,7 +230,6 @@ def merge_sensors(
     # -------------------------
     # PAR BLOCK
     # -------------------------
-    logger.info("Processing PAR...")
     par = sensors["par"]
 
     if not par.empty:
@@ -239,26 +249,56 @@ def merge_sensors(
     # -------------------------
     # SUNA BLOCK
     # -------------------------
-    logger.info("Processing SUNA...")
     suna = sensors["suna"]
 
     if not suna.empty:
-        if "Times" not in ctd.columns:
-            ctd["Times"], _ = convert_timestamp(ctd["Timestamp"])
+        if suna_cal_file is None and suna_cal_dir is None:
+            # Fast path: no TSP correction.
+            suna["NitrateConcentration[uM]"] = calibrate_nitrate(
+                suna,
+                cruise,
+                cal_file=None,
+                cal_dir=None,
+            )
 
-        suna["Times"], suna["matdate"] = convert_timestamp(suna["Timestamp"])
-        suna = suna.sort_values("Timestamp")
-        ctd_sorted = ctd.sort_values("Timestamp")
+        else:
+            # Slow path: TSP correction needs CTD fields and matdate.
+            suna["Times"], suna["matdate"] = convert_timestamp(suna["Timestamp"])
 
-        suna = pd.merge_asof(
-            suna,
-            ctd_sorted[["Timestamp", "Salinity", "Temperature", "Pressure"]],
-            on="Timestamp",
-            direction="nearest",
-            allow_exact_matches=True,
-        )
+            ctd_sorted = ctd.sort_values("Timestamp")
+            t_ctd = ctd_sorted["Timestamp"].to_numpy(dtype=np.float64)
+            t_suna = suna["Timestamp"].to_numpy(dtype=np.float64)
 
-        suna["NitrateConcentration[uM]"] = calibrate_nitrate(suna, cruise)
+            suna["Salinity"] = np.interp(
+                t_suna,
+                t_ctd,
+                ctd_sorted["Salinity"].to_numpy(dtype=np.float64),
+                left=np.nan,
+                right=np.nan,
+            )
+
+            suna["Temperature"] = np.interp(
+                t_suna,
+                t_ctd,
+                ctd_sorted["Temperature"].to_numpy(dtype=np.float64),
+                left=np.nan,
+                right=np.nan,
+            )
+
+            suna["Pressure"] = np.interp(
+                t_suna,
+                t_ctd,
+                ctd_sorted["Pressure"].to_numpy(dtype=np.float64),
+                left=np.nan,
+                right=np.nan,
+            )
+
+            suna["NitrateConcentration[uM]"] = calibrate_nitrate(
+                suna,
+                cruise,
+                cal_file=suna_cal_file,
+                cal_dir=suna_cal_dir,
+            )
 
     suna_agg = (
         suna.sort_values("Timestamp")
@@ -271,26 +311,22 @@ def merge_sensors(
     # -------------------------
     # CAST / PROFILE SEGMENTATION
     # -------------------------
-    logger.info("Identifying casts and deployments from CTD...")
+    logger.info("Identifying deployments and casts from CTD...")
     cast, deployment = identify_profiles(
         depth=ctd_agg["Depth"].to_numpy(np.float64),
         time_seconds=ctd_agg["time_bin"].to_numpy(np.float64),
         bin_size=1.0,
         dir_window=4,
-        max_gap_sec=300.0,
-        min_turn_depth=10.0,
+        max_gap_sec=1200.0, # 20 minutes
+        min_turn_depth=5.0,
     )
 
     ctd_agg["cast"] = pd.Series(cast).astype("Int64")
     ctd_agg["deployment"] = pd.Series(deployment).astype("Int64")
 
-    logger.info("Detected casts: %s", ctd_agg["cast"].nunique())
-    logger.info("Detected deployments: %s", ctd_agg["deployment"].nunique())
-
     # -------------------------
     # MEDIA BLOCK
     # -------------------------
-    logger.info("Processing media files...")
     media_aggs = []
 
     for media_dir in media_list_dirs:
@@ -380,7 +416,7 @@ def merge_sensors(
     sled.rename(columns=SLED_COLUMNS, inplace=True)
 
     # -------------------------
-    # QC: GPS INTERPOLATION INSIDE DEPLOYMENTS ONLY
+    # QC: GPS INTERPOLATION WITHIN DEPLOYMENTS
     # -------------------------
     gps_cols = ["latitude", "longitude"]
 
@@ -399,15 +435,19 @@ def merge_sensors(
         sled.loc[tmp.index, gps_cols] = tmp[gps_cols]
         sled = sled.reset_index()
 
-        logger.info("QC: interpolated GPS inside deployments only.")
+        logger.info("QC: %s GPS points interpolated within deployments.", tmp[gps_cols].isnull().sum().sum())
 
     # -------------------------
     # SAVE OUTPUT
     # -------------------------
     out_path = out_dir / f"{start_date.strftime('%Y%m%d')}_{cruise}.csv"
     sled.to_csv(out_path, index=False)
-
-    logger.info("Final rows: %s", len(sled))
-    logger.info("Saved: %s", out_path)
+    
+    logger.info("Merge complete for cruise %s | %s to %s", cruise, start, end)
+    logger.info("Bin size: %s seconds", time_bin_seconds)
+    logger.info("Data points: %s", len(sled))
+    logger.info("Number of deployments: %s", ctd_agg["deployment"].nunique())
+    logger.info("Number of casts: %s", ctd_agg["cast"].nunique())
+    logger.info("Output saved to: %s", out_path)
 
     return out_path

@@ -18,13 +18,13 @@ from stingray.io.suna import (
 
 logger = logging.getLogger(__name__)
 
-def calc_bofu_no3(
+def tsp_correction(
     spec: dict[str, Any],
     ncal: dict[str, Any],
     pcor_flag: int,
 ) -> dict[str, Any]:
     """
-    Apply SUNA nitrate correction algorithm.
+    Apply SUNA TSP correction algorithm.
     """
     wl_offset = ncal["WL_offset"]
     d = spec.copy()
@@ -183,16 +183,58 @@ def calibrate_nitrate(
     cruise: str,
     nitrate_col: str = "NitrateConcentration[uM]",
     dark_col: str = "DarkValueUsedForFit",
-    cal_dir: str | Path = "suna_calibration",
+    cal_file: str | Path | None = None,
+    cal_dir: str | Path | None = None,
 ) -> np.ndarray:
     """
     Calibrate nitrate concentration from SUNA sensor data.
 
-    Preserves alignment with the original dataframe rows and does not mutate
+    Behavior:
+    - If cal_file is provided, use that calibration file.
+    - Else if cal_dir is provided, scan that directory for a cruise-matching CAL file.
+    - Else skip TSP correction and return raw nitrate values.
+
+    Preserves alignment with the original dataframe rows and avoids mutating
     the caller's dataframe in place.
     """
-    df = df.copy()
+
+    # Fast path: no calibration requested
+    if cal_file is None and cal_dir is None:
+        raw = df[nitrate_col].to_numpy(dtype=float, copy=True)
+
+        if dark_col in df.columns:
+            dark = df[dark_col].to_numpy(dtype=float, copy=False)
+            raw[dark == 0] = np.nan
+
+        return raw
+
+    # Optional calibration lookup
+    if cal_file is not None:
+        cal_path = Path(cal_file)
+    else:
+        cal_path = find_suna_calibration_file(cruise=cruise, cal_dir=cal_dir)
+
+    # Fast fallback: calibration requested, but not found
+    if cal_path is None:
+        logger.info(
+            "No calibration file found for cruise %s, using raw nitrate values.",
+            cruise,
+        )
+
+        raw = df[nitrate_col].to_numpy(dtype=float, copy=True)
+
+        if dark_col in df.columns:
+            dark = df[dark_col].to_numpy(dtype=float, copy=False)
+            raw[dark == 0] = np.nan
+
+        return raw
+
+    if not cal_path.exists():
+        raise FileNotFoundError(f"Calibration file not found: {cal_path}")
+
+    # Slow path starts here only when TSP correction is actually needed
     out_full = np.full(len(df), np.nan, dtype=float)
+    df = df.copy()
 
     df[nitrate_col] = pd.to_numeric(df[nitrate_col], errors="coerce")
     if dark_col in df.columns:
@@ -202,17 +244,6 @@ def calibrate_nitrate(
     data_ref_dir = pkg_dir / "data_reference"
     spec_path = data_ref_dir / "spec.mat"
     hdr_file = data_ref_dir / "suna_hdr.txt"
-
-    cal_path = find_suna_calibration_file(cruise=cruise, cal_dir=cal_dir)
-    if cal_path is None:
-        logger.info(
-            "No calibration file found for cruise %s, using raw nitrate values.",
-            cruise,
-        )
-        raw = df[nitrate_col].to_numpy(dtype=float)
-        if dark_col in df.columns:
-            raw[df[dark_col].to_numpy(dtype=float) == 0] = np.nan
-        return raw
 
     cal_path = ensure_suna_cal_lines(cal_path, "AP")
     spec = parse_mat(spec_path)
@@ -237,6 +268,7 @@ def calibrate_nitrate(
         "Temperature",
         "Pressure",
         "matdate",
+        dark_col,
         *uv_list,
     ]
     missing = [c for c in required_cols if c not in df.columns]
@@ -264,7 +296,7 @@ def calibrate_nitrate(
     spec["spectra_WL_range"][0][0] = ncal["WL"][0]
     spec["spectra_WL_range"][0][1] = ncal["WL"][-1]
 
-    result = calc_bofu_no3(spec, ncal, pcor_flag=1)
+    result = tsp_correction(spec, ncal, pcor_flag=1)
     corrected = result["data"][:, 6]
 
     if len(corrected) != len(work_idx):
@@ -279,9 +311,8 @@ def calibrate_nitrate(
     else:
         out_full[work_idx] = corrected
 
-    if dark_col in work.columns:
-        dark_zero = work[dark_col].to_numpy(dtype=float) == 0
-        out_full[work_idx[dark_zero]] = np.nan
+    dark_zero = work[dark_col].to_numpy(dtype=float) == 0
+    out_full[work_idx[dark_zero]] = np.nan
 
     logger.info("Calibration file found for cruise %s, TSP correction applied.", cruise)
     return out_full

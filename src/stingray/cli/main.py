@@ -16,7 +16,7 @@ COMMANDS = {
     },
     ("images", "abundance"): {
         "help": "Compute image abundance",
-        "target": "stingray.images.abundance:cli_main",
+        "target": "stingray.images.abundance:main",
     },
     ("images", "frame-timestamp"): {
         "help": "Build frame timestamp CSV",
@@ -30,10 +30,14 @@ COMMANDS = {
         "help": "Add Tator annotation links",
         "target": "stingray.images.get_tator_link:main",
     },
+    ("images", "add-media"): {
+        "help": "Add media metadata to merged sensor CSV",
+        "target": "stingray.images.add_media:main",
+    },
     ("ctd", "download"): {
         "help": "Download CTD cruise data",
         "target": "ctd_tools.download:main",
-    }
+    },
 }
 
 
@@ -83,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
             command,
             help=spec["help"],
             description=spec["help"],
+            add_help=False,  # let the target command handle -h/--help
         )
         command_parser.set_defaults(target=spec["target"])
 

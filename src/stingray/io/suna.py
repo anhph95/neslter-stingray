@@ -63,7 +63,6 @@ def ensure_suna_cal_lines(
 ) -> Path:
     """
     Ensure required metadata lines exist in a SUNA CAL file.
-
     If required lines are missing, write a modified CAL file to `out_dir`
     and return that new path. If the original file already contains the
     required lines, return the original file path.

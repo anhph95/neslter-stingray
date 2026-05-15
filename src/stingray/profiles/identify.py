@@ -40,10 +40,10 @@ def identify_profiles(
     smooth_window=7,
     dir_window=10,
     max_gap_sec=3600.0,
-    min_samples=10,
+    min_samples=5,
     surface_start_threshold=20.0,
     min_turn_depth=5.0,
-    min_turn_time=60.0,
+    min_turn_time=30.0,
 ):
     """
     Identify CTD profiles (casts) from depth and time.
@@ -113,9 +113,6 @@ def identify_profiles(
     if n == 0:
         return np.empty(0, dtype=np.float64), np.empty(0, dtype=np.int64)
 
-    # -----------------------------
-    # Step 0: Midpoint quantization
-    # -----------------------------
     depth_q = np.empty(n, dtype=np.float64)
     half_bin = bin_size / 2.0
 
@@ -126,9 +123,6 @@ def identify_profiles(
         else:
             depth_q[i] = np.floor((d + half_bin) / bin_size) * bin_size
 
-    # -----------------------------
-    # Step 1: Rolling median smoothing
-    # -----------------------------
     smooth = np.empty(n, dtype=np.float64)
     hw = smooth_window // 2
 
@@ -137,9 +131,6 @@ def identify_profiles(
         hi = n if i + hw + 1 > n else i + hw + 1
         smooth[i] = _nanmedian_window(depth_q, lo, hi)
 
-    # -----------------------------
-    # Step 2: Direction estimate
-    # -----------------------------
     direction = np.empty(n, dtype=np.float64)
     direction[:] = np.nan
 
@@ -157,12 +148,7 @@ def identify_profiles(
         elif d < 0:
             direction[i] = -1.0
 
-    # -----------------------------
-    # Step 3: Profile boundaries
-    # -----------------------------
     profile = np.zeros(n, dtype=np.int64)
-
-    # Size n+1 is safe because max number of profiles cannot exceed n
     hard_profile = np.zeros(n + 1, dtype=np.bool_)
 
     deployment_id = np.zeros(n, dtype=np.int64)
@@ -229,11 +215,9 @@ def identify_profiles(
 
     profile_out = profile.astype(np.float64)
 
-    # -----------------------------
-    # Step 4: Validate profiles
-    # -----------------------------
     max_pid = profile[n - 1] + 1
     is_valid = np.zeros(max_pid, dtype=np.bool_)
+    profile_deployment = np.full(max_pid, -1, dtype=np.int64)
 
     for pid in range(max_pid):
         seen = 0
@@ -242,6 +226,9 @@ def identify_profiles(
 
         for i in range(n):
             if profile[i] == pid:
+                if profile_deployment[pid] == -1:
+                    profile_deployment[pid] = deployment_id[i]
+
                 d = depth_q[i]
                 if not np.isnan(d):
                     if d < min_depth:
@@ -253,11 +240,17 @@ def identify_profiles(
         is_valid[pid] = (seen >= min_samples) and (min_depth <= surface_start_threshold)
 
     for pid in range(max_pid):
-        if is_valid[pid] or hard_profile[pid]:
+        if is_valid[pid]:
             continue
 
         prev_valid = -1
+        this_dep = profile_deployment[pid]
+
         for p in range(pid - 1, -1, -1):
+            if hard_profile[p + 1]:
+                break
+            if profile_deployment[p] != this_dep:
+                break
             if is_valid[p]:
                 prev_valid = p
                 break
@@ -271,10 +264,6 @@ def identify_profiles(
                 if profile[i] == pid:
                     profile_out[i] = np.nan
 
-    # -----------------------------
-    # Step 5: Relabel contiguously
-    # -----------------------------
-    # Avoid Python dict for numba stability; use an array mapping instead.
     old_to_new = np.full(max_pid, -1, dtype=np.int64)
     new_id = 0
 
